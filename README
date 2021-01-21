@@ -3,8 +3,3 @@ read a BUFR file from a radiosonde ascent obtained from gisc.dwd.de
 run as:
 
    python readascent.py  A_IUSD02LOWM210300_C_EDZW_20210121040000_59339751.bin >sounding.json
-
-
-unclear:
-  how many samples are in the file
-  how to skip incomplete records

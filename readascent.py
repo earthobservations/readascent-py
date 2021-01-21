@@ -97,6 +97,7 @@ def bufr_decode(input_file, args):
             'windDirection', 'windSpeed']
 
     samples = []
+    skippedSamples = 0
     for i in range(1, num_samples+1):
         sample = dict()
         for k in keys:
@@ -106,8 +107,12 @@ def bufr_decode(input_file, args):
             except Exception as e:
                 logging.debug(f"sample={i} key={k} e={e}, setting to None")
                 sample[k] = None
+        # call BS on bogus values
+        if float(sample['airTemperature']) < -273 or float(sample['dewpointTemperature']) < -273:
+            skippedSamples += 1
+            continue
         samples.append(sample)
-    logging.debug(f"samples processed={len(samples)}")
+    logging.debug(f"samples used={len(samples)} skipped={skippedSamples}")
 
     header['samples'] = samples
 

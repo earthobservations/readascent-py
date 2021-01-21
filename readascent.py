@@ -18,13 +18,21 @@ def bufr_decode(input_file, args):
     ibufr = codes_bufr_new_from_file(f)
     codes_set(ibufr, 'unpack', 1)
 
+    skippedHdrs = 0
+
     header = dict()
     arraykeys = ['delayedDescriptorReplicationFactor',
                  'extendedDelayedDescriptorReplicationFactor',
                  'unexpandedDescriptors']
 
     for k in arraykeys:
-        header[k] = list(codes_get_array(ibufr, k))
+        try:
+            header[k] = list(codes_get_array(ibufr, k))
+        except Exception as e:
+            logging.error(f"array key in header key={k} e={e}")
+            skippedHdrs += 1
+
+
 
     num_samples = header['extendedDelayedDescriptorReplicationFactor'][0]
     logging.debug(f"num_samples={num_samples}")
@@ -88,7 +96,11 @@ def bufr_decode(input_file, args):
         'text']
 
     for k in scalarkeys:
-        header[k] = codes_get(ibufr, k)
+        try:
+            header[k] = codes_get(ibufr, k)
+        except Exception as e:
+            logging.error(f"scalar hdr key={k} e={e}")
+            skippedHdrs += 1
 
     keys = ['timePeriod', 'extendedVerticalSoundingSignificance',
             'pressure', 'nonCoordinateGeopotentialHeight',
@@ -112,7 +124,7 @@ def bufr_decode(input_file, args):
             skippedSamples += 1
             continue
         samples.append(sample)
-    logging.debug(f"samples used={len(samples)} skipped={skippedSamples}")
+    logging.debug(f"samples used={len(samples)} skipped samples={skippedSamples} skipped header keys={skippedHdrs}")
 
     header['samples'] = samples
 

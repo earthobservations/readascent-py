@@ -19,7 +19,7 @@ def bufr_decode(input_file, args):
     ibufr = codes_bufr_new_from_file(f)
     codes_set(ibufr, 'unpack', 1)
 
-    skippedHdrs = 0
+    missingHdrKeys = 0
 
     header = dict()
     arraykeys = ['delayedDescriptorReplicationFactor',
@@ -31,7 +31,7 @@ def bufr_decode(input_file, args):
             header[k] = list(codes_get_array(ibufr, k))
         except Exception as e:
             logging.error(f"array key in header key={k} e={e}")
-            skippedHdrs += 1
+            missingHdrKeys += 1
 
 
 
@@ -101,7 +101,7 @@ def bufr_decode(input_file, args):
             header[k] = codes_get(ibufr, k)
         except Exception as e:
             logging.error(f"scalar hdr key={k} e={e}")
-            skippedHdrs += 1
+            missingHdrKeys += 1
 
     keys = ['timePeriod', 'extendedVerticalSoundingSignificance',
             'pressure', 'nonCoordinateGeopotentialHeight',
@@ -110,7 +110,8 @@ def bufr_decode(input_file, args):
             'windDirection', 'windSpeed']
 
     samples = []
-    skippedSamples = 0
+    invalidSamples = 0
+    missingValues = 0
     for i in range(1, num_samples+1):
         sample = dict()
         for k in keys:
@@ -118,14 +119,16 @@ def bufr_decode(input_file, args):
             try:
                 sample[k] = codes_get(ibufr, name)
             except Exception as e:
-                logging.debug(f"sample={i} key={k} e={e}, setting to None")
-                sample[k] = None
+                logging.debug(f"sample={i} key={k} e={e}, skipping")
+                missingValues += 1
         # call BS on bogus values
         if float(sample['airTemperature']) < -273 or float(sample['dewpointTemperature']) < -273:
-            skippedSamples += 1
+            invalidSamples += 1
             continue
         samples.append(sample)
-    logging.debug(f"samples used={len(samples)} skipped samples={skippedSamples} skipped header keys={skippedHdrs}")
+    logging.debug((f"samples used={len(samples)}, invalid samples="
+                  f"{invalidSamples}, skipped header keys={missingHdrKeys},"
+                  f" missing values={missingValues}"))
 
     header['samples'] = samples
 

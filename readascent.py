@@ -9,8 +9,9 @@ import sys
 from eccodes import *
 import argparse
 import pprint
-import geojson
-import geobuf
+# import geojson
+# import geobuf
+# import czml3
 import logging
 
 def bufr_decode(input_file, args):

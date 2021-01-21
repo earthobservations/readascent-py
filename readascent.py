@@ -97,7 +97,7 @@ def bufr_decode(input_file, args):
             'windDirection', 'windSpeed']
 
     samples = []
-    for i in range(0, num_samples+1):
+    for i in range(1, num_samples+1):
         sample = dict()
         for k in keys:
             name = f"#{i}#{k}"

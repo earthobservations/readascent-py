@@ -8,11 +8,13 @@ import traceback
 import sys
 from eccodes import *
 import argparse
-import pprint
-# import geojson
-# import geobuf
+import json
+import geojson
+import geobuf
 # import czml3
 import logging
+import datetime
+import os
 
 def bufr_decode(input_file, args):
     f = open(input_file, 'rb')
@@ -33,10 +35,8 @@ def bufr_decode(input_file, args):
             logging.error(f"array key in header key={k} e={e}")
             missingHdrKeys += 1
 
-
-
     num_samples = header['extendedDelayedDescriptorReplicationFactor'][0]
-    logging.debug(f"num_samples={num_samples}")
+    logging.info(f"num_samples={num_samples}")
 
     scalarkeys = [
         'edition',
@@ -112,7 +112,7 @@ def bufr_decode(input_file, args):
     samples = []
     invalidSamples = 0
     missingValues = 0
-    for i in range(1, num_samples+1):
+    for i in range(1, num_samples + 1):
         sample = dict()
         for k in keys:
             name = f"#{i}#{k}"
@@ -127,35 +127,80 @@ def bufr_decode(input_file, args):
             continue
         samples.append(sample)
     logging.debug((f"samples used={len(samples)}, invalid samples="
-                  f"{invalidSamples}, skipped header keys={missingHdrKeys},"
-                  f" missing values={missingValues}"))
-
-    header['samples'] = samples
-
-    if args.geojson or args.geobuf:
-        gen_geojson(header, args.geobuf)
-    elif args.czml:
-        gen_czml(header)
-    else:
-        pp = pprint.PrettyPrinter(indent=4)
-        pp.pprint(header)
+                   f"{invalidSamples}, skipped header keys={missingHdrKeys},"
+                   f" missing values={missingValues}"))
 
     codes_release(ibufr)
     f.close()
+    return header, samples
 
-def gen_geojson(header, geobuf):
+
+def extract_header(args, h, samples):
+    takeoff = datetime.datetime(year=h['year'],
+                                   month=h['month'],
+                                   day=h['day'],
+                                   minute=h['minute'],
+                                   hour=h['hour'],
+                                   second=h['second'],
+                                   tzinfo=None)
+    properties = {
+        "firstSeen": takeoff.isoformat(),
+        "lat": h['latitude'],
+        "lon": h['longitude'],
+        "elevation": h['height'],  # ?
+        "station_elevation": h['heightOfStationGroundAboveMeanSeaLevel'], # ?
+        "baro_elevation": h['heightOfBarometerAboveMeanSeaLevel'], # ?
+        "sonde_serial": h['radiosondeSerialNumber'],
+        "sonde_frequency":  h['radiosondeOperatingFrequency'],
+        "sonde_type":  h['radiosondeType']
+    }
+    fc = geojson.FeatureCollection([])
+    fc.properties = properties
+
+    # add name "Location time" or geocode location
+    # add wmo_id
+
+    lat_t = fc.properties['lat']
+    lon_t = fc.properties['lon']
+    firstSeen = fc.properties['firstSeen']
+    previous_elevation = fc.properties['elevation'] - args.hstep
+
+    for s in samples:
+        lat = lat_t + s['latitudeDisplacement']
+        lon = lon_t + s['longitudeDisplacement']
+        ele = s['nonCoordinateGeopotentialHeight']
+        if ele < previous_elevation + args.hstep:
+            continue
+        previous_elevation = ele
+        delta = datetime.timedelta(seconds=s['timePeriod'])
+        sampleTime = takeoff + delta
+        properties = {
+            "time": sampleTime.timestamp(),
+            "gpheight": ele,
+            "temp": s['airTemperature'],
+            "dewpoint": s['dewpointTemperature'],
+            "pressure": s['pressure'],
+            "wdir": s['windDirection'],
+            "wspeed": s['windSpeed']
+        }
+        f = geojson.Feature(geometry=geojson.Point((lon, lat, ele)),
+                            properties=properties)
+        fc.features.append(f)
+    fc.properties['lastSeen'] = sampleTime.isoformat()
+    return fc
+
+def gen_czml(fc):
     logging.warning(f"not implemented yet")
-
-def gen_czml(header):
-    logging.warning(f"not implemented yet")
-
-
 
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',
-                                    add_help=True)
+                                     add_help=True)
     parser.add_argument('-v', '--verbose', action='store_true', default=False)
+    parser.add_argument('--orig', action='store_true', default=False)
+    parser.add_argument('--hstep', action='store', type=int, default=0)
+    parser.add_argument('--destdir', action='store', default=".")
     parser.add_argument('--geojson', action='store_true', default=False)
+    parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--geobuf', action='store_true', default=False)
     parser.add_argument('--czml', action='store_true', default=False)
     parser.add_argument('--reportevery', action='store', default=1)
@@ -169,11 +214,39 @@ def main():
     logging.basicConfig(level=level)
 
     for f in args.files:
+        (fn, ext) = os.path.splitext(os.path.basename(f))
         try:
-            logging.debug(f"processing {f}")
-            bufr_decode(f, args)
+            logging.debug(f"processing: {f}")
+            (h, s) = bufr_decode(f, args)
         except CodesInternalError as err:
             traceback.print_exc(file=sys.stderr)
+
+        h['samples'] = s
+        if args.orig:
+            print(h)
+
+        fc = extract_header(args, h, s)
+
+        if args.geojson:
+            dest = f'{args.destdir}/{fn}.geojson'
+            logging.debug(f'writing {dest}')
+            with open(dest, 'wb') as gjfile:
+                gj = geojson.dumps(fc, indent=4)
+                gjfile.write(gj.encode("utf8"))
+
+        if args.geobuf:
+            dest = f'{args.destdir}/{fn}.geobuf'
+            logging.debug(f'writing {dest}')
+            with open(dest, 'wb') as gbfile:
+                gb = geobuf.encode(fc)
+                gbfile.write(gb)
+
+        if args.czml:
+            gen_czml(f)
+
+        if args.dump_geojson:
+            print(gj)
+
     logging.debug('Finished')
 
 

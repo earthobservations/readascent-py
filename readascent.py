@@ -15,6 +15,9 @@ import geobuf
 import logging
 import datetime
 import os
+import metpy.calc
+from metpy.units import units
+from metpy.constants import earth_gravity
 
 def bufr_decode(input_file, args):
     f = open(input_file, 'rb')
@@ -168,22 +171,27 @@ def extract_header(args, h, samples):
     for s in samples:
         lat = lat_t + s['latitudeDisplacement']
         lon = lon_t + s['longitudeDisplacement']
-        ele = s['nonCoordinateGeopotentialHeight']
-        if ele < previous_elevation + args.hstep:
+        gpheight = s['nonCoordinateGeopotentialHeight']
+        if gpheight < previous_elevation + args.hstep:
             continue
-        previous_elevation = ele
+        previous_elevation = gpheight
         delta = datetime.timedelta(seconds=s['timePeriod'])
         sampleTime = takeoff + delta
+
+        gph = units.Quantity(gpheight, 'meter')
+        geopot = gph * earth_gravity
+        height = metpy.calc.geopotential_to_height(geopot)
+        #print(gph, height, height.magnitude)
         properties = {
             "time": sampleTime.timestamp(),
-            "gpheight": ele,
+            "gpheight": gpheight,
             "temp": s['airTemperature'],
             "dewpoint": s['dewpointTemperature'],
             "pressure": s['pressure'],
             "wdir": s['windDirection'],
             "wspeed": s['windSpeed']
         }
-        f = geojson.Feature(geometry=geojson.Point((lon, lat, ele)),
+        f = geojson.Feature(geometry=geojson.Point((lon, lat, height.magnitude)),
                             properties=properties)
         fc.features.append(f)
     fc.properties['lastSeen'] = sampleTime.isoformat()

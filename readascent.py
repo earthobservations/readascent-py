@@ -18,6 +18,8 @@ import os
 import metpy.calc
 from metpy.units import units
 from metpy.constants import earth_gravity
+from math import atan, sin, cos
+import brotli
 
 def bufr_decode(input_file, args):
     f = open(input_file, 'rb')
@@ -138,7 +140,14 @@ def bufr_decode(input_file, args):
     return header, samples
 
 
-def extract_header(args, h, samples):
+rad = 4.0 * atan(1)/180.
+
+def winds_to_UV(windSpeed, windDirection):
+    u = -windSpeed * sin(rad * windDirection)
+    v = -windSpeed * cos(rad * windDirection)
+    return u,v
+
+def convert_to_geojson(args, h, samples):
     takeoff = datetime.datetime(year=h['year'],
                                    month=h['month'],
                                    day=h['day'],
@@ -172,27 +181,38 @@ def extract_header(args, h, samples):
         lat = lat_t + s['latitudeDisplacement']
         lon = lon_t + s['longitudeDisplacement']
         gpheight = s['nonCoordinateGeopotentialHeight']
-        if gpheight < previous_elevation + args.hstep:
-            continue
-        previous_elevation = gpheight
+
         delta = datetime.timedelta(seconds=s['timePeriod'])
         sampleTime = takeoff + delta
 
         gph = units.Quantity(gpheight, 'meter')
         geopot = gph * earth_gravity
         height = metpy.calc.geopotential_to_height(geopot)
-        #print(gph, height, height.magnitude)
+
+        if height.magnitude < previous_elevation + args.hstep:
+            continue
+        previous_elevation = height.magnitude
+
+        u,v = winds_to_UV(s['windSpeed'], s['windDirection'])
+        if args.winds_u_v:
+            winds = {
+                "wind_u": u,
+                "wind_v": v
+            }
+        else:
+            winds = {
+                "wdir": s['windDirection'],
+                "wspeed": s['windSpeed']
+            }
         properties = {
             "time": sampleTime.timestamp(),
             "gpheight": gpheight,
             "temp": s['airTemperature'],
             "dewpoint": s['dewpointTemperature'],
             "pressure": s['pressure'],
-            "wdir": s['windDirection'],
-            "wspeed": s['windSpeed']
         }
         f = geojson.Feature(geometry=geojson.Point((lon, lat, height.magnitude)),
-                            properties=properties)
+                            properties={**properties, **winds})
         fc.features.append(f)
     fc.properties['lastSeen'] = sampleTime.isoformat()
     return fc
@@ -206,12 +226,13 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true', default=False)
     parser.add_argument('--orig', action='store_true', default=False)
     parser.add_argument('--hstep', action='store', type=int, default=0)
+    parser.add_argument('--winds-u-v', action='store_true', default=False)
     parser.add_argument('--destdir', action='store', default=".")
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--geobuf', action='store_true', default=False)
+    parser.add_argument('--brotli', action='store_true', default=False)
     parser.add_argument('--czml', action='store_true', default=False)
-    parser.add_argument('--reportevery', action='store', default=1)
     parser.add_argument('files', nargs='*')
 
     args = parser.parse_args()
@@ -233,14 +254,22 @@ def main():
         if args.orig:
             print(h)
 
-        fc = extract_header(args, h, s)
+        fc = convert_to_geojson(args, h, s)
+        logging.debug(f'output samples retained: {len(fc.features)}')
+
+        cext = ""
+        if args.brotli:
+            cext = ".br"
 
         if args.geojson:
-            dest = f'{args.destdir}/{fn}.geojson'
+            dest = f'{args.destdir}/{fn}.geojson{cext}'
             logging.debug(f'writing {dest}')
             with open(dest, 'wb') as gjfile:
-                gj = geojson.dumps(fc, indent=4)
-                gjfile.write(gj.encode("utf8"))
+                gj = geojson.dumps(fc, indent=4).encode("utf8")
+                cmp = gj
+                if args.brotli:
+                    cmp = brotli.compress(gj)
+                gjfile.write(cmp)
 
         if args.geobuf:
             dest = f'{args.destdir}/{fn}.geobuf'

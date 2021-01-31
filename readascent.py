@@ -10,8 +10,6 @@ from eccodes import *
 import argparse
 import json
 import geojson
-import geobuf
-# import czml3
 import logging
 import datetime
 import os
@@ -230,9 +228,7 @@ def main():
     parser.add_argument('--destdir', action='store', default=".")
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
-    parser.add_argument('--geobuf', action='store_true', default=False)
     parser.add_argument('--brotli', action='store_true', default=False)
-    parser.add_argument('--czml', action='store_true', default=False)
     parser.add_argument('files', nargs='*')
 
     args = parser.parse_args()
@@ -270,16 +266,6 @@ def main():
                 if args.brotli:
                     cmp = brotli.compress(gj)
                 gjfile.write(cmp)
-
-        if args.geobuf:
-            dest = f'{args.destdir}/{fn}.geobuf'
-            logging.debug(f'writing {dest}')
-            with open(dest, 'wb') as gbfile:
-                gb = geobuf.encode(fc)
-                gbfile.write(gb)
-
-        if args.czml:
-            gen_czml(f)
 
         if args.dump_geojson:
             print(gj)

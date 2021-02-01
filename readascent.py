@@ -154,6 +154,7 @@ def convert_to_geojson(args, h, samples):
                                    second=h['second'],
                                    tzinfo=None)
     properties = {
+        "wmo_id":  str(h['blockNumber']) +  str(h['stationNumber']),
         "firstSeen": takeoff.isoformat(),
         "lat": h['latitude'],
         "lon": h['longitude'],
@@ -251,17 +252,18 @@ def main():
             print(h)
 
         fc = convert_to_geojson(args, h, s)
-        logging.debug(f'output samples retained: {len(fc.features)}')
+        wmo_id = fc.properties['wmo_id']
+        logging.debug(f'output samples retained: {len(fc.features)}, WMO id={wmo_id}')
 
         cext = ""
         if args.brotli:
             cext = ".br"
 
+        gj = geojson.dumps(fc, indent=4).encode("utf8")
         if args.geojson:
             dest = f'{args.destdir}/{fn}.geojson{cext}'
             logging.debug(f'writing {dest}')
             with open(dest, 'wb') as gjfile:
-                gj = geojson.dumps(fc, indent=4).encode("utf8")
                 cmp = gj
                 if args.brotli:
                     cmp = brotli.compress(gj)

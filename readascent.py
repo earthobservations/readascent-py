@@ -304,7 +304,7 @@ def gen_output(args, h, s, fn, zip):
     fc = convert_to_geojson(args, h, s)
     fc.properties['origin_fn'] = fn
     if zip:
-        fc.properties['origin_zip'] = zip
+        fc.properties['origin_zip'] = pathlib.PurePath(zip).name
     station_id = fc.properties['station_id']
     logging.debug(
         f'output samples retained: {len(fc.features)}, station id={station_id}')

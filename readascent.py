@@ -110,7 +110,7 @@ def bufr_decode(f, args):
 #        'reasonForTermination',
         'blockNumber',
         'stationNumber',
-#        'radiosondeType',
+        'radiosondeType',
 #        'solarAndInfraredRadiationCorrection',
 #        'trackingTechniqueOrStatusOfSystem',
 #        'measuringEquipmentType',
@@ -134,7 +134,7 @@ def bufr_decode(f, args):
         try:
             header[k] = codes_get(ibufr, k)
         except Exception as e:
-            logging.info(f"scalar hdr key={k} e={e}")
+            logging.debug(f"scalar hdr key={k} e={e}")
             missingHdrKeys += 1
 
     keys = ['timePeriod',
@@ -379,7 +379,7 @@ def update_summary(args, updated_stations):
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
-            print("----append ",id, len(oldlist))
+            #print("----append ",id, len(oldlist))
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
@@ -391,7 +391,7 @@ def update_summary(args, updated_stations):
                     seen.add(t)
                     dedup.append(d)
 
-            print("----dedup ",id, len(dedup))
+            #print("----dedup ",id, len(dedup))
 
             summary[id]['ascents'] = dedup
         else:
@@ -407,7 +407,7 @@ def update_summary(args, updated_stations):
                 }
             st['ascents'] = [asc]
             summary[id] = st
-            print("----first ",id)
+            #print("----first ",id)
 
 
         js = orjson.dumps(summary, option=orjson.OPT_INDENT_2)
@@ -473,7 +473,7 @@ def main():
                     log.error(
                         f'ERROR: Did not find {info.filename} in zipe file {f}')
                 else:
-                    logging.debug(f"processing: {info.filename} from {f}")
+                    #logging.debug(f"processing: {info.filename} from {f}")
                     (bn, ext) = os.path.splitext(info.filename)
                     process(args, file, info.filename, f)
                     file.close()

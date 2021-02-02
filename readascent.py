@@ -126,7 +126,7 @@ def bufr_decode(f, args):
         'heightOfStationGroundAboveMeanSeaLevel',
         'heightOfBarometerAboveMeanSeaLevel',
         'height',
-        'shipOrMobileLandStationIdentifier',
+#        'shipOrMobileLandStationIdentifier',
         #'text'
         ]
 
@@ -136,6 +136,13 @@ def bufr_decode(f, args):
         except Exception as e:
             logging.debug(f"scalar hdr key={k} e={e}")
             missingHdrKeys += 1
+
+    # special-case this wart
+    try:
+        k = 'shipOrMobileLandStationIdentifier'
+        header[k] = codes_get(ibufr, k)
+    except Exception:
+        missingHdrKeys += 1        
 
     keys = ['timePeriod',
             # 'extendedVerticalSoundingSignificance',

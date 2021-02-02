@@ -21,6 +21,7 @@ import tempfile
 import ciso8601
 from pprint import pprint
 from operator import itemgetter
+from string import punctuation
 
 earth_avg_radius =  6371008.7714
 earth_gravity =  9.80665
@@ -68,16 +69,16 @@ def bufr_decode(f, args):
     logging.info(f"num_samples={num_samples}")
 
     scalarkeys = [
-        'edition',
-        'masterTableNumber',
-        'bufrHeaderCentre',
-        'bufrHeaderSubCentre',
-        'updateSequenceNumber',
-        'dataCategory',
-        'internationalDataSubCategory',
-        'dataSubCategory',
-        'masterTablesVersionNumber',
-        'localTablesVersionNumber',
+#        'edition',
+#        'masterTableNumber',
+#        'bufrHeaderCentre',
+#        'bufrHeaderSubCentre',
+#        'updateSequenceNumber',
+#        'dataCategory',
+#        'internationalDataSubCategory',
+#        'dataSubCategory',
+#        'masterTablesVersionNumber',
+#        'localTablesVersionNumber',
         'typicalYear',
         'typicalMonth',
         'typicalDay',
@@ -86,34 +87,34 @@ def bufr_decode(f, args):
         'typicalSecond',
         'typicalDate',
         'typicalTime',
-        'numberOfSubsets',
-        'observedData',
-        'compressedData',
+#        'numberOfSubsets',
+#        'observedData',
+#        'compressedData',
         'radiosondeSerialNumber',
-        'radiosondeAscensionNumber',
-        'radiosondeReleaseNumber',
-        'observerIdentification',
-        'radiosondeCompleteness',
-        'radiosondeConfiguration',
-        'correctionAlgorithmsForHumidityMeasurements',
-        'radiosondeGroundReceivingSystem',
+#        'radiosondeAscensionNumber',
+#        'radiosondeReleaseNumber',
+#        'observerIdentification',
+#        'radiosondeCompleteness',
+#        'radiosondeConfiguration',
+#        'correctionAlgorithmsForHumidityMeasurements',
+#        'radiosondeGroundReceivingSystem',
         'radiosondeOperatingFrequency',
-        'balloonManufacturer',
-        'weightOfBalloon',
-        'amountOfGasUsedInBalloon',
-        'pressureSensorType',
-        'temperatureSensorType',
-        'humiditySensorType',
-        'geopotentialHeightCalculation',
-        'softwareVersionNumber',
-        'reasonForTermination',
+#        'balloonManufacturer',
+#        'weightOfBalloon',
+#        'amountOfGasUsedInBalloon',
+#        'pressureSensorType',
+#        'temperatureSensorType',
+#        'humiditySensorType',
+#        'geopotentialHeightCalculation',
+#        'softwareVersionNumber',
+#        'reasonForTermination',
         'blockNumber',
         'stationNumber',
-        'radiosondeType',
-        'solarAndInfraredRadiationCorrection',
-        'trackingTechniqueOrStatusOfSystem',
-        'measuringEquipmentType',
-        'timeSignificance',
+#        'radiosondeType',
+#        'solarAndInfraredRadiationCorrection',
+#        'trackingTechniqueOrStatusOfSystem',
+#        'measuringEquipmentType',
+#        'timeSignificance',
         'year',
         'month',
         'day',
@@ -126,7 +127,8 @@ def bufr_decode(f, args):
         'heightOfBarometerAboveMeanSeaLevel',
         'height',
         'shipOrMobileLandStationIdentifier',
-        'text']
+        #'text'
+        ]
 
     for k in scalarkeys:
         try:
@@ -135,7 +137,8 @@ def bufr_decode(f, args):
             logging.info(f"scalar hdr key={k} e={e}")
             missingHdrKeys += 1
 
-    keys = ['timePeriod', 'extendedVerticalSoundingSignificance',
+    keys = ['timePeriod',
+            # 'extendedVerticalSoundingSignificance',
             'pressure', 'nonCoordinateGeopotentialHeight',
             'latitudeDisplacement', 'longitudeDisplacement',
             'airTemperature', 'dewpointTemperature',
@@ -179,12 +182,16 @@ def gen_id(h):
     bn = h.get('blockNumber', 2147483647)
     sn = h.get('stationNumber', 2147483647)
 
-    if 'shipOrMobileLandStationIdentifier' in h:
-        return ("mobile", h['shipOrMobileLandStationIdentifier'])
-    elif (bn != 2147483647 and sn != 2147483647):
+    if (bn != 2147483647 and sn != 2147483647):
         return ("wmo", f'{bn:02d}{sn:03d}')
-    else:
-        return ("location", f"{h['latitude']:.3f}:{h['longitude']:.3f}")
+
+    if 'shipOrMobileLandStationIdentifier' in h:
+        id = h['shipOrMobileLandStationIdentifier']
+        # if it looks remotely like an id...
+        if not any(p in id for p in punctuation):
+            return ("mobile", h['shipOrMobileLandStationIdentifier'])
+
+    return ("location", f"{h['latitude']:.3f}:{h['longitude']:.3f}")
 
 def convert_to_geojson(args, h, samples):
     takeoff = datetime.datetime(year=h['year'],
@@ -314,10 +321,10 @@ def gen_output(args, h, s, fn, zip):
 
     if args.by_basename:
         dest = f'{args.destdir}/{fn}.geojson{cext}'
-        ref = f'{fn}.geojson{cext}'
+        ref = f'{fn}.geojson'
     else:
         dest = f'{args.destdir}/{cc}/{station_id}_{day}_{time}.geojson{cext}'
-        ref = f'{cc}/{station_id}_{day}_{time}.geojson{cext}'
+        ref = f'{cc}/{station_id}_{day}_{time}.geojson'
 
     if args.mkdirs:
         path = pathlib.Path(dest).parent.absolute()
@@ -372,6 +379,7 @@ def update_summary(args, updated_stations):
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
+            print("----append ",id, len(oldlist))
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
@@ -382,6 +390,9 @@ def update_summary(args, updated_stations):
                 if t not in seen:
                     seen.add(t)
                     dedup.append(d)
+
+            print("----dedup ",id, len(dedup))
+
             summary[id]['ascents'] = dedup
         else:
             if id in stations:
@@ -396,6 +407,8 @@ def update_summary(args, updated_stations):
                 }
             st['ascents'] = [asc]
             summary[id] = st
+            print("----first ",id)
+
 
         js = orjson.dumps(summary, option=orjson.OPT_INDENT_2)
         #pprint(summary)
@@ -405,7 +418,7 @@ def update_summary(args, updated_stations):
         #os.sync(fd)
         os.close(fd)
         os.rename(path, args.summary)
-
+        os.chmod(args.summary, 0o644)
 
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',

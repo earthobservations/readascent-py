@@ -400,7 +400,7 @@ def update_summary(args, updated_stations):
         js = orjson.dumps(summary, option=orjson.OPT_INDENT_2)
         #pprint(summary)
 
-        fd, path = tempfile.mkstemp()
+        fd, path = tempfile.mkstemp(dir=args.tmpdir)
         os.write(fd, js)
         #os.sync(fd)
         os.close(fd)
@@ -423,6 +423,7 @@ def main():
     parser.add_argument('--mkdirs', action='store_true', default=False)
     parser.add_argument('--summary', action='store', default=None)
     parser.add_argument('--stations', action='store', default=None)
+    parser.add_argument('--tmpdir', action='store', default="/tmp")
     parser.add_argument('files', nargs='*')
 
     args = parser.parse_args()
@@ -439,6 +440,8 @@ def main():
     logging.basicConfig(level=level)
 
 
+    os.umask(0o22)
+
     for f in args.files:
         (fn, ext) = os.path.splitext(os.path.basename(f))
         logging.debug(f"processing: {f} fn={fn} ext={ext}")
@@ -449,7 +452,7 @@ def main():
                 try:
                     logging.debug(f"reading: {info.filename} from {f}")
                     data = zf.read(info.filename)
-                    fd, path = tempfile.mkstemp()
+                    fd, path = tempfile.mkstemp(dir=args.tmpdir)
                     os.write(fd, data)
                     os.lseek(fd, 0, os.SEEK_SET)
                     file = os.fdopen(fd)

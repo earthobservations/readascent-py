@@ -5,6 +5,7 @@ import sys
 import csv
 import re
 import geojson
+import json
 import brotli
 
 def initialize_stations(filename):
@@ -14,7 +15,7 @@ def initialize_stations(filename):
                  "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY"]
 
     stations = geojson.FeatureCollection([])
-
+    stationdict = dict()
     with open(filename, 'r') as csvfile:
         #print("Running station initializer...")
         stndata = csv.reader(csvfile, delimiter='\t')
@@ -33,24 +34,36 @@ def initialize_stations(filename):
             stn_lon = float(fields['stn_lon'])
             stn_altitude = float(fields['stn_altitude'])
 
+
             #print(stn_wmoid, stn_lat, stn_lon, stn_name, stn_altitude)
 
             if stn_altitude != -998.8:
-                point = geojson.Point((stn_lon, stn_lat, stn_altitude))
-                properties = {
-                    "wmo_id": stn_wmoid,
-                    "name":  stn_name
+                stationdict[stn_wmoid] = {
+                    "name":  stn_name,
+                    "lat": stn_lat,
+                    "lon" : stn_lon,
+                    "elevation": stn_altitude
                 }
-                feature = geojson.Feature(geometry=point,
-                              properties=properties)
-                stations.features.append(feature)
+                # point = geojson.Point((stn_lon, stn_lat, stn_altitude))
+                # properties = {
+                #     "wmo_id": stn_wmoid,
+                #     "name":  stn_name
+                # }
+                # feature = geojson.Feature(geometry=point,
+                #               properties=properties)
+                # stations.features.append(feature)
 
         (fn, ext) = os.path.splitext(os.path.basename(filename))
+        with open(f'{fn}.json', 'wb') as jfile:
+            j = json.dumps(stationdict, indent=4).encode("utf8")
+            #cmp = brotli.compress(gj)
+            jfile.write(j)
 
-        with open(f'{fn}.geojson.br', 'wb') as gjfile:
-            gj = geojson.dumps(stations, indent=4).encode("utf8")
-            cmp = brotli.compress(gj)
-            gjfile.write(cmp)
+        if False:
+            with open(f'{fn}.geojson', 'wb') as gjfile:
+                gj = geojson.dumps(stations, indent=4).encode("utf8")
+                #cmp = brotli.compress(gj)
+                gjfile.write(gj)
         #print(len(gj), "-->",len(cmp))
 
 

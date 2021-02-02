@@ -66,7 +66,7 @@ def bufr_decode(f, args):
             missingHdrKeys += 1
 
     num_samples = header['extendedDelayedDescriptorReplicationFactor'][0]
-    logging.info(f"num_samples={num_samples}")
+    #logging.info(f"num_samples={num_samples}")
 
     scalarkeys = [
 #        'edition',
@@ -137,12 +137,16 @@ def bufr_decode(f, args):
             logging.debug(f"scalar hdr key={k} e={e}")
             missingHdrKeys += 1
 
-    # special-case this wart
-    try:
-        k = 'shipOrMobileLandStationIdentifier'
-        header[k] = codes_get(ibufr, k)
-    except Exception:
-        missingHdrKeys += 1        
+    # special-case warts we do not really care about
+    warts = ['shipOrMobileLandStationIdentifier'
+
+            ]
+
+    for k in warts:
+        try:
+            header[k] = codes_get(ibufr, k)
+        except Exception:
+            missingHdrKeys += 1
 
     keys = ['timePeriod',
             # 'extendedVerticalSoundingSignificance',
@@ -368,7 +372,7 @@ def update_summary(args, updated_stations):
         with open(args.summary, 'rb') as f:
             s = f.read().decode()
             summary = geojson.loads(s)
-            logging.debug(f'read summary from {args.summary}')
+            #logging.debug(f'read summary from {args.summary}')
     else:
         logging.debug(f'no summary file')
         summary = dict()
@@ -377,7 +381,7 @@ def update_summary(args, updated_stations):
         with open(args.stations, 'rb') as f:
             s = f.read().decode()
             stations = orjson.loads(s)
-            logging.debug(f'read stations from {args.stations}')
+            #logging.debug(f'read stations from {args.stations}')
     else:
         logging.debug(f'no stations file')
         stations = dict()
@@ -464,7 +468,7 @@ def main():
 
     for f in args.files:
         (fn, ext) = os.path.splitext(os.path.basename(f))
-        logging.debug(f"processing: {f} fn={fn} ext={ext}")
+        #logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
         if ext == '.zip':
             zf = zipfile.ZipFile(f)
@@ -492,7 +496,6 @@ def main():
 
     if args.summary:
         update_summary(args, updated_stations)
-    logging.debug('Finished')
 
 
 if __name__ == "__main__":

@@ -23,10 +23,14 @@ from pprint import pprint
 from operator import itemgetter
 from string import punctuation
 
-earth_avg_radius =  6371008.7714
-earth_gravity =  9.80665
+earth_avg_radius = 6371008.7714
+earth_gravity = 9.80665
+
+MAX_FLIGHT_DURATION = 3600*10  # rather unlikely
 
 # metpy is terminally slow, so roll our own sans dimension checking
+
+
 def geopotential_height_to_height(gph):
     geopotential = gph * earth_gravity
     return (geopotential * earth_avg_radius) / (earth_gravity * earth_avg_radius - geopotential)
@@ -34,8 +38,9 @@ def geopotential_height_to_height(gph):
 
 class OneLineExceptionFormatter(logging.Formatter):
     def formatException(self, exc_info):
-        result = super(OneLineExceptionFormatter, self).formatException(exc_info)
-        return repr(result) # or format into one line however you want to
+        result = super(OneLineExceptionFormatter,
+                       self).formatException(exc_info)
+        return repr(result)  # or format into one line however you want to
 
     def format(self, record):
         s = super(OneLineExceptionFormatter, self).format(record)
@@ -43,6 +48,14 @@ class OneLineExceptionFormatter(logging.Formatter):
             s = s.replace('\n', '') + '|'
         return s
 
+class MissingKeyError(Exception):
+    def __init__(self, key, message="missing required key"):
+        self.key = key
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        return f'{self.key} -> {self.message}'
 
 def bufr_decode(f, args):
 
@@ -52,94 +65,65 @@ def bufr_decode(f, args):
     codes_set(ibufr, 'unpack', 1)
 
     missingHdrKeys = 0
-
     header = dict()
-    arraykeys = ['delayedDescriptorReplicationFactor',
-                 'extendedDelayedDescriptorReplicationFactor',
-                 'unexpandedDescriptors']
+    try:
+        k = 'extendedDelayedDescriptorReplicationFactor'
+        num_samples = codes_get_array(ibufr, k)[0]
+    except Exception as e:
+        raise MissingKeyError(k, message="cant determine number of samples")
 
-    for k in arraykeys:
-        try:
-            header[k] = list(codes_get_array(ibufr, k))
-        except Exception as e:
-            logging.info(f"array key in header key={k} e={e}")
-            missingHdrKeys += 1
+    # BAIL HERE if no num_samples
 
-    num_samples = header['extendedDelayedDescriptorReplicationFactor'][0]
-    #logging.info(f"num_samples={num_samples}")
-
-    scalarkeys = [
-#        'edition',
-#        'masterTableNumber',
-#        'bufrHeaderCentre',
-#        'bufrHeaderSubCentre',
-#        'updateSequenceNumber',
-#        'dataCategory',
-#        'internationalDataSubCategory',
-#        'dataSubCategory',
-#        'masterTablesVersionNumber',
-#        'localTablesVersionNumber',
+    ivals = [
         'typicalYear',
         'typicalMonth',
         'typicalDay',
         'typicalHour',
         'typicalMinute',
         'typicalSecond',
-        'typicalDate',
-        'typicalTime',
-#        'numberOfSubsets',
-#        'observedData',
-#        'compressedData',
-        'radiosondeSerialNumber',
-#        'radiosondeAscensionNumber',
-#        'radiosondeReleaseNumber',
-#        'observerIdentification',
-#        'radiosondeCompleteness',
-#        'radiosondeConfiguration',
-#        'correctionAlgorithmsForHumidityMeasurements',
-#        'radiosondeGroundReceivingSystem',
-        'radiosondeOperatingFrequency',
-#        'balloonManufacturer',
-#        'weightOfBalloon',
-#        'amountOfGasUsedInBalloon',
-#        'pressureSensorType',
-#        'temperatureSensorType',
-#        'humiditySensorType',
-#        'geopotentialHeightCalculation',
-#        'softwareVersionNumber',
-#        'reasonForTermination',
         'blockNumber',
         'stationNumber',
         'radiosondeType',
-#        'solarAndInfraredRadiationCorrection',
-#        'trackingTechniqueOrStatusOfSystem',
-#        'measuringEquipmentType',
-#        'timeSignificance',
+        'height',
         'year',
         'month',
         'day',
         'hour',
         'minute',
         'second',
+    ]
+    fvals = [
+        'radiosondeOperatingFrequency',
         'latitude',
         'longitude',
         'heightOfStationGroundAboveMeanSeaLevel',
         'heightOfBarometerAboveMeanSeaLevel',
-        'height',
-#        'shipOrMobileLandStationIdentifier',
-        #'text'
-        ]
+    ]
+    svals = [
+        'radiosondeSerialNumber',
+        'typicalDate',
+        'typicalTime',
+    ]
 
-    for k in scalarkeys:
+    for k in ivals + fvals + svals:
         try:
-            header[k] = codes_get(ibufr, k)
+            value = codes_get(ibufr, k)
+            if k in ivals:
+                if value != eccodes.CODES_MISSING_LONG:
+                    header[k] = value
+            elif k in fvals:
+                if value != eccodes.CODES_MISSING_DOUBLE:
+                    header[k] = value
+            elif k in svals:
+                header[k] = value
+            else:
+                pass
         except Exception as e:
-            logging.debug(f"scalar hdr key={k} e={e}")
+            logging.debug(f"missing header key={k} e={e}")
             missingHdrKeys += 1
 
     # special-case warts we do not really care about
     warts = ['shipOrMobileLandStationIdentifier'
-
             ]
 
     for k in warts:
@@ -148,30 +132,49 @@ def bufr_decode(f, args):
         except Exception:
             missingHdrKeys += 1
 
-    keys = ['timePeriod',
-            # 'extendedVerticalSoundingSignificance',
-            'pressure', 'nonCoordinateGeopotentialHeight',
-            'latitudeDisplacement', 'longitudeDisplacement',
-            'airTemperature', 'dewpointTemperature',
-            'windDirection', 'windSpeed']
+    fkeys = [ # 'extendedVerticalSoundingSignificance',
+            'pressure',
+            'nonCoordinateGeopotentialHeight',
+            'latitudeDisplacement',
+            'longitudeDisplacement',
+            'airTemperature',
+            'dewpointTemperature',
+            'windDirection',
+            'windSpeed']
 
     samples = []
     invalidSamples = 0
     missingValues = 0
+
     for i in range(1, num_samples + 1):
         sample = dict()
-        for k in keys:
-            name = f"#{i}#{k}"
-            try:
-                sample[k] = codes_get(ibufr, name)
-            except Exception as e:
-                logging.debug(f"sample={i} key={k} e={e}, skipping")
-                missingValues += 1
-        # call BS on bogus values
-        if float(sample['airTemperature']) < -273 or float(sample['dewpointTemperature']) < -273:
+
+        k = 'timePeriod'
+        timePeriod = codes_get(ibufr, k)
+        if timePeriod == eccodes.CODES_MISSING_LONG:
             invalidSamples += 1
             continue
-        samples.append(sample)
+
+        sample[k] = timePeriod
+
+        sampleOK = True
+        for k in fkeys:
+            name = f"#{i}#{k}"
+            try:
+                value = codes_get(ibufr, name)
+                if value != eccodes.CODES_MISSING_DOUBLE:
+                    sample[k] = value
+                else:
+                    sampleOK = False
+                    missingValues += 1
+            except Exception as e:
+                sampleOK = False
+                logging.debug(f"sample={i} key={k} e={e}, skipping")
+                missingValues += 1
+
+        if sampleOK:
+            samples.append(sample)
+
     logging.debug((f"samples used={len(samples)}, invalid samples="
                    f"{invalidSamples}, skipped header keys={missingHdrKeys},"
                    f" missing values={missingValues}"))
@@ -204,6 +207,10 @@ def gen_id(h):
 
     return ("location", f"{h['latitude']:.3f}:{h['longitude']:.3f}")
 
+def add_if_present(d, h, name, bname):
+    if bname in h:
+        d[name] = h[bname]
+
 def convert_to_geojson(args, h, samples):
     takeoff = datetime.datetime(year=h['year'],
                                 month=h['month'],
@@ -215,7 +222,8 @@ def convert_to_geojson(args, h, samples):
 
     typ, id = gen_id(h)
 
-    ts = ciso8601.parse_datetime(h['typicalDate'] + " " +  h['typicalTime']).timestamp()
+    ts = ciso8601.parse_datetime(
+        h['typicalDate'] + " " + h['typicalTime']).timestamp()
 
     properties = {
         "station_id":  id,
@@ -226,23 +234,25 @@ def convert_to_geojson(args, h, samples):
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],
         "lon": h['longitude'],
-        "station_elevation": h['heightOfStationGroundAboveMeanSeaLevel'],  # ?
-        "baro_elevation": h['heightOfBarometerAboveMeanSeaLevel'],  # ?
-#        "sonde_serial": h['radiosondeSerialNumber'],
-#        "sonde_frequency":  h['radiosondeOperatingFrequency'],
+        # "station_elevation": h['heightOfStationGroundAboveMeanSeaLevel'],  # ?
+        # "baro_elevation": h['heightOfBarometerAboveMeanSeaLevel'],  # ?
         "sonde_type":  h['radiosondeType']
     }
-    # patch up missing ascent elevation with station elevation
+    add_if_present(properties, h, "sonde_type", 'radiosondeType')
+    add_if_present(properties, h, "sonde_serial", 'radiosondeSerialNumber')
+    add_if_present(properties, h, "sonde_frequency", 'radiosondeOperatingFrequency')
+
+    # try hard to determine a reasonable takeoff elevation value
     if 'height' in h:
         properties['elevation'] = h['height']
-    else:
+    elif 'heightOfStationGroundAboveMeanSeaLevel' in h:
         properties['elevation'] = h['heightOfStationGroundAboveMeanSeaLevel']
-
-    if 'radiosondeSerialNumber' in h:
-        properties['sonde_serial'] = h['radiosondeSerialNumber']
-
-    if 'radiosondeOperatingFrequency' in h:
-        properties['sonde_frequency'] = h['radiosondeOperatingFrequency']
+    elif 'heightOfBarometerAboveMeanSeaLevel' in h:
+        properties['elevation'] = h['heightOfBarometerAboveMeanSeaLevel']
+    else:
+        # take height of first sample
+        gph = samples[0]['nonCoordinateGeopotentialHeight']
+        properties['elevation'] = geopotential_height_to_height(gph)
 
     fc = geojson.FeatureCollection([])
     fc.properties = properties
@@ -296,6 +306,7 @@ def gen_czml(fc):
 
 updated_stations = []
 
+
 def gen_output(args, h, s, fn, zip):
     h['samples'] = s
     if args.orig:
@@ -306,9 +317,13 @@ def gen_output(args, h, s, fn, zip):
         return
 
     # QC here!
-    if not ({'year', 'month', 'day', 'minute', 'hour', 'second'} <= h.keys()):
-        logging.info(f'QC: skipping {fn} from {zip}')
+    if not ({'year', 'month', 'day', 'minute', 'hour'} <= h.keys()):
+        logging.info(f'QC: skipping {fn} from {zip} - day/time missing')
         return
+
+    if not 'second' in h:
+        h['second'] = 0  # dont care
+
     if h['year'] == 2147483647:
         logging.info(f'QC: skipping {fn} from {zip}, no date')
         return
@@ -316,10 +331,6 @@ def gen_output(args, h, s, fn, zip):
     if h['height'] == 2147483647:
         # delete BS key, will be filled in by station elevation
         del h['height']
-
-    if  h['second'] > 59:
-        h['second'] = 0
-
 
     fc = convert_to_geojson(args, h, s)
     fc.properties['origin_fn'] = fn
@@ -361,7 +372,8 @@ def gen_output(args, h, s, fn, zip):
 
     fc.properties['path'] = ref
     if args.dump_geojson:
-        print(gj)
+        #js = orjson.dumps(fc, option=orjson.OPT_INDENT_2)
+        pprint(fc)
 
 
 def process(args, f, fn, zip):
@@ -376,16 +388,19 @@ def process(args, f, fn, zip):
     else:
         gen_output(args, h, s, fn, zip)
 
+
 def patchup(ascents):
     # remove any cruft which crept in
     for a in ascents:
         e = a['elevation']
         if e == 2147483647:
             a['elevation'] = a['station_elevation']
-            logging.info(f"---- patchup {a['station_id']} elevation={a['elevation']}")
+            logging.info(
+                f"---- patchup {a['station_id']} elevation={a['elevation']}")
         if 'sonde_type' in a and a['sonde_type'] == 2147483647:
             del a['sonde_type']
             logging.info(f"---- patchup {a['station_id']} delete sonde_type")
+
 
 def update_summary(args, updated_stations):
     if args.summary and os.path.exists(args.summary):
@@ -409,13 +424,14 @@ def update_summary(args, updated_stations):
     for id, desc in summary.items():
         patchup(desc['ascents'])
 
-    for id, asc in  updated_stations:
+    for id, asc in updated_stations:
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
-            #patchup(asc)
+            # patchup(asc)
             oldlist.append(asc)
-            newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
+            newlist = sorted(oldlist, key=itemgetter(
+                'syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
             seen = set()
             dedup = []
@@ -427,14 +443,14 @@ def update_summary(args, updated_stations):
             summary[id]['ascents'] = dedup
         else:
             if id in stations:
-                st =  stations[id]
+                st = stations[id]
             else:
                 # anonymous + mobile stations
                 st = {
                     "name": asc['station_id'],
-                    "lat" : asc['lat'],
-                    "lon" : asc['lon'],
-                    "elevation" : asc['elevation']
+                    "lat": asc['lat'],
+                    "lon": asc['lon'],
+                    "elevation": asc['elevation']
                 }
             st['ascents'] = [asc]
             summary[id] = st
@@ -449,13 +465,14 @@ def update_summary(args, updated_stations):
 
         # create GeoJSON version of summary
         gj = json2geojson(summary)
-        dest = os.path.splitext(args.summary)[0]+'.geojson'
+        dest = os.path.splitext(args.summary)[0] + '.geojson'
         fd, path = tempfile.mkstemp(dir=args.tmpdir)
         os.write(fd, gj.encode("utf8"))
         os.fsync(fd)
         os.close(fd)
         os.rename(path, dest)
         os.chmod(dest, 0o644)
+
 
 def json2geojson(sj):
     fc = geojson.FeatureCollection([])
@@ -469,6 +486,7 @@ def json2geojson(sj):
                             properties=newdict)
         fc.features.append(f)
     return geojson.dumps(fc, indent=4)
+
 
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',
@@ -501,7 +519,6 @@ def main():
     # root.setFormatter(f)
 
     logging.basicConfig(level=level)
-
 
     os.umask(0o22)
 

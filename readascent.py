@@ -372,25 +372,24 @@ def update_summary(args, updated_stations):
         with open(args.summary, 'rb') as f:
             s = f.read().decode()
             summary = geojson.loads(s)
-            #logging.debug(f'read summary from {args.summary}')
+            logging.debug(f'read summary from {args.summary}')
     else:
-        logging.debug(f'no summary file')
+        logging.info(f'no summary file')
         summary = dict()
 
     if args.stations and os.path.exists(args.stations):
         with open(args.stations, 'rb') as f:
             s = f.read().decode()
             stations = orjson.loads(s)
-            #logging.debug(f'read stations from {args.stations}')
+            logging.debug(f'read stations from {args.stations}')
     else:
-        logging.debug(f'no stations file')
+        logging.info(f'no stations file')
         stations = dict()
 
     for id, asc in  updated_stations:
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
-            #print("----append ",id, len(oldlist))
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
@@ -401,9 +400,6 @@ def update_summary(args, updated_stations):
                 if t not in seen:
                     seen.add(t)
                     dedup.append(d)
-
-            #print("----dedup ",id, len(dedup))
-
             summary[id]['ascents'] = dedup
         else:
             if id in stations:
@@ -418,18 +414,38 @@ def update_summary(args, updated_stations):
                 }
             st['ascents'] = [asc]
             summary[id] = st
-            #print("----first ",id)
-
 
         js = orjson.dumps(summary, option=orjson.OPT_INDENT_2)
-        #pprint(summary)
-
         fd, path = tempfile.mkstemp(dir=args.tmpdir)
         os.write(fd, js)
-        #os.sync(fd)
+        os.fsync(fd)
         os.close(fd)
         os.rename(path, args.summary)
         os.chmod(args.summary, 0o644)
+
+        # create GeoJSON version of summary
+        gj = json2geojson(summary)
+        dest = os.path.splitext(args.summary)[0]+'.geojson'
+        fd, path = tempfile.mkstemp(dir=args.tmpdir)
+        os.write(fd, gj.encode("utf8"))
+        os.fsync(fd)
+        os.close(fd)
+        os.rename(path, dest)
+        os.chmod(dest, 0o644)
+
+def json2geojson(sj):
+    fc = geojson.FeatureCollection([])
+
+    for id, desc in sj.items():
+        pprint(desc)
+        pt = (desc['lon'], desc['lat'], desc['elevation'])
+        deleatur = ['lon', 'lat', 'elevation']
+        newdict = {k: v for k, v in desc.items() if not k in deleatur}
+
+        f = geojson.Feature(geometry=geojson.Point(pt),
+                            properties=newdict)
+        fc.features.append(f)
+    return geojson.dumps(fc, indent=4)
 
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',

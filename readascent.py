@@ -26,7 +26,7 @@ from string import punctuation
 earth_avg_radius = 6371008.7714
 earth_gravity = 9.80665
 
-MAX_FLIGHT_DURATION = 3600*10  # rather unlikely
+MAX_FLIGHT_DURATION = 3600*5  # rather unlikely
 FAKE_TIME_STEPS = 30 # assume 30sec update interval
 
 # metpy is terminally slow, so roll our own sans dimension checking
@@ -254,9 +254,6 @@ def convert_to_geojson(args, h, samples):
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],
         "lon": h['longitude'],
-        # "station_elevation": h['heightOfStationGroundAboveMeanSeaLevel'],  # ?
-        # "baro_elevation": h['heightOfBarometerAboveMeanSeaLevel'],  # ?
-        "sonde_type":  h['radiosondeType']
     }
     add_if_present(properties, h, "sonde_type", 'radiosondeType')
     add_if_present(properties, h, "sonde_serial", 'radiosondeSerialNumber')
@@ -317,6 +314,11 @@ def convert_to_geojson(args, h, samples):
                             properties={**properties, **winds})
         fc.features.append(f)
     fc.properties['lastSeen'] = sampleTime.timestamp()
+
+    duration = fc.properties['lastSeen']  - fc.properties['firstSeen']
+    if duration > MAX_FLIGHT_DURATION:
+        logging.error(f"--- unreasonably long flight: {(duration/3600):.1f} hours")
+
     return fc
 
 
@@ -402,18 +404,6 @@ def process(args, f, fn, zip):
         gen_output(args, h, s, fn, zip)
 
 
-def patchup(ascents):
-    # remove any cruft which crept in
-    for a in ascents:
-        e = a['elevation']
-        if e == 2147483647:
-            a['elevation'] = a['station_elevation']
-            logging.info(
-                f"---- patchup {a['station_id']} elevation={a['elevation']}")
-        if 'sonde_type' in a and a['sonde_type'] == 2147483647:
-            del a['sonde_type']
-            logging.info(f"---- patchup {a['station_id']} delete sonde_type")
-
 
 def update_summary(args, updated_stations):
     if args.summary and os.path.exists(args.summary):
@@ -434,14 +424,10 @@ def update_summary(args, updated_stations):
         logging.info(f'no stations file')
         stations = dict()
 
-    for id, desc in summary.items():
-        patchup(desc['ascents'])
-
     for id, asc in updated_stations:
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
-            # patchup(asc)
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter(
                 'syn_timestamp'), reverse=True)

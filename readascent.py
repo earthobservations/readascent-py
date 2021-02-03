@@ -437,7 +437,6 @@ def json2geojson(sj):
     fc = geojson.FeatureCollection([])
 
     for id, desc in sj.items():
-        pprint(desc)
         pt = (desc['lon'], desc['lat'], desc['elevation'])
         deleatur = ['lon', 'lat', 'elevation']
         newdict = {k: v for k, v in desc.items() if not k in deleatur}

@@ -58,7 +58,7 @@ class MissingKeyError(Exception):
     def __str__(self):
         return f'{self.key} -> {self.message}'
 
-def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True):
+def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
 
     ibufr = codes_bufr_new_from_file(f)
     if not ibufr:
@@ -148,14 +148,14 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True):
     invalidSamples = 0
     missingValues = 0
     fakeTimeperiod = 0
-#fakeTimes=True, fakeDisplacement=True
+    fixups = []  #report once only
+
     for i in range(1, num_samples + 1):
         sample = dict()
 
         k = 'timePeriod'
         timePeriod = codes_get(ibufr, f"#{i}#{k}")
         if timePeriod == eccodes.CODES_MISSING_LONG:
-            #logging.debug(f"--MISSING {i} timePeriod fakeTimes: {fakeTimes} fakeTimeperiod={fakeTimeperiod}")
 
             invalidSamples += 1
             if not fakeTimes:
@@ -163,6 +163,9 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True):
             else:
                 timePeriod = fakeTimeperiod
                 fakeTimeperiod += FAKE_TIME_STEPS
+                if not k in fixups:
+                    logging.debug(f"--FIXUP timePeriod fakeTimes:{fakeTimes} fakeTimeperiod={fakeTimeperiod}")
+                    fixup.append(k)
 
         sample[k] = timePeriod
 
@@ -176,7 +179,9 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True):
                     sample[k] = value
                 else:
                     if fakeDisplacement and k in replaceable:
-                        #logging.warning(f"--REPLACIING {i} key {k} ")
+                        if not k in fixups:
+                            logging.debug(f"--FIXUP  key {k}")
+                            fixup.append(k)
                         sample[k] = 0
                     else:
                         #logging.warning(f"--MISSING {i} key {k} ")
@@ -339,13 +344,6 @@ def gen_output(args, h, s, fn, zip):
     if not 'second' in h:
         h['second'] = 0  # dont care
 
-    if h['year'] == 2147483647:
-        logging.info(f'QC: skipping {fn} from {zip}, no date')
-        return
-
-    if h['height'] == 2147483647:
-        # delete BS key, will be filled in by station elevation
-        del h['height']
 
     fc = convert_to_geojson(args, h, s)
     fc.properties['origin_fn'] = fn

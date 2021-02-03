@@ -165,7 +165,7 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
                 fakeTimeperiod += FAKE_TIME_STEPS
                 if not k in fixups:
                     logging.debug(f"--FIXUP timePeriod fakeTimes:{fakeTimes} fakeTimeperiod={fakeTimeperiod}")
-                    fixup.append(k)
+                    fixups.append(k)
 
         sample[k] = timePeriod
 
@@ -181,7 +181,7 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
                     if fakeDisplacement and k in replaceable:
                         if not k in fixups:
                             logging.debug(f"--FIXUP  key {k}")
-                            fixup.append(k)
+                            fixups.append(k)
                         sample[k] = 0
                     else:
                         #logging.warning(f"--MISSING {i} key {k} ")

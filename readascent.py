@@ -383,7 +383,7 @@ def patchup(ascents):
         if e == 2147483647:
             a['elevation'] = a['station_elevation']
             logging.info(f"---- patchup {a['station_id']} elevation={a['elevation']}")
-        if a['sonde_type'] == 2147483647:
+        if 'sonde_type' in a and a['sonde_type'] == 2147483647:
             del a['sonde_type']
             logging.info(f"---- patchup {a['station_id']} delete sonde_type")
 

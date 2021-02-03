@@ -150,7 +150,7 @@ def bufr_decode(f, args):
         sample = dict()
 
         k = 'timePeriod'
-        timePeriod = codes_get(ibufr, k)
+        timePeriod = codes_get(ibufr, f"#{i}#{k}")
         if timePeriod == eccodes.CODES_MISSING_LONG:
             invalidSamples += 1
             continue

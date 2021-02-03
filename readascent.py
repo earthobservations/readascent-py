@@ -383,6 +383,9 @@ def patchup(ascents):
         if e == 2147483647:
             a['elevation'] = a['station_elevation']
             logging.info(f"---- patchup {a['station_id']} elevation={a['elevation']}")
+        if a['sonde_type'] == 2147483647:
+            del a['sonde_type']
+            logging.info(f"---- patchup {a['station_id']} delete sonde_type")
 
 def update_summary(args, updated_stations):
     if args.summary and os.path.exists(args.summary):
@@ -403,11 +406,14 @@ def update_summary(args, updated_stations):
         logging.info(f'no stations file')
         stations = dict()
 
+    for id, desc in summary.items():
+        patchup(desc['ascents'])
+
     for id, asc in  updated_stations:
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
-            patchup(oldlist)
+            #patchup(asc)
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python

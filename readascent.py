@@ -226,13 +226,18 @@ def convert_to_geojson(args, h, samples):
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],
         "lon": h['longitude'],
-        "elevation": h['height'],  # ?
         "station_elevation": h['heightOfStationGroundAboveMeanSeaLevel'],  # ?
         "baro_elevation": h['heightOfBarometerAboveMeanSeaLevel'],  # ?
 #        "sonde_serial": h['radiosondeSerialNumber'],
 #        "sonde_frequency":  h['radiosondeOperatingFrequency'],
         "sonde_type":  h['radiosondeType']
     }
+    # patch up missing ascent elevation with station elevation
+    if 'height' in h:
+        properties['elevation'] = h['height']
+    else:
+        properties['elevation'] = h['heightOfStationGroundAboveMeanSeaLevel']
+
     if 'radiosondeSerialNumber' in h:
         properties['sonde_serial'] = h['radiosondeSerialNumber']
 
@@ -308,6 +313,10 @@ def gen_output(args, h, s, fn, zip):
         logging.info(f'QC: skipping {fn} from {zip}, no date')
         return
 
+    if h['height'] == 2147483647:
+        # delete BS key, will be filled in by station elevation
+        del h['height']
+
     if  h['second'] > 59:
         h['second'] = 0
 
@@ -367,6 +376,14 @@ def process(args, f, fn, zip):
     else:
         gen_output(args, h, s, fn, zip)
 
+def patchup(ascents):
+    # remove any cruft which crept in
+    for a in ascents:
+        e = a['elevation']
+        if e == 2147483647:
+            a['elevation'] = a['station_elevation']
+            logging.info(f"---- patchup {a['station_id']} elevation={a['elevation']}")
+
 def update_summary(args, updated_stations):
     if args.summary and os.path.exists(args.summary):
         with open(args.summary, 'rb') as f:
@@ -390,6 +407,7 @@ def update_summary(args, updated_stations):
         if id in summary:
             # append, sort and de-duplicate
             oldlist = summary[id]['ascents']
+            patchup(oldlist)
             oldlist.append(asc)
             newlist = sorted(oldlist, key=itemgetter('syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python

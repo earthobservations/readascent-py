@@ -27,6 +27,7 @@ earth_avg_radius = 6371008.7714
 earth_gravity = 9.80665
 
 MAX_FLIGHT_DURATION = 3600*10  # rather unlikely
+FAKE_TIME_STEPS = 30 # assume 30sec update interval
 
 # metpy is terminally slow, so roll our own sans dimension checking
 
@@ -57,7 +58,7 @@ class MissingKeyError(Exception):
     def __str__(self):
         return f'{self.key} -> {self.message}'
 
-def bufr_decode(f, args):
+def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True):
 
     ibufr = codes_bufr_new_from_file(f)
     if not ibufr:
@@ -70,6 +71,7 @@ def bufr_decode(f, args):
         k = 'extendedDelayedDescriptorReplicationFactor'
         num_samples = codes_get_array(ibufr, k)[0]
     except Exception as e:
+        codes_release(ibufr)
         raise MissingKeyError(k, message="cant determine number of samples")
 
     # BAIL HERE if no num_samples
@@ -145,18 +147,26 @@ def bufr_decode(f, args):
     samples = []
     invalidSamples = 0
     missingValues = 0
-
+    fakeTimeperiod = 0
+#fakeTimes=True, fakeDisplacement=True
     for i in range(1, num_samples + 1):
         sample = dict()
 
         k = 'timePeriod'
         timePeriod = codes_get(ibufr, f"#{i}#{k}")
         if timePeriod == eccodes.CODES_MISSING_LONG:
+            #logging.debug(f"--MISSING {i} timePeriod fakeTimes: {fakeTimes} fakeTimeperiod={fakeTimeperiod}")
+
             invalidSamples += 1
-            continue
+            if not fakeTimes:
+                continue
+            else:
+                timePeriod = fakeTimeperiod
+                fakeTimeperiod += FAKE_TIME_STEPS
 
         sample[k] = timePeriod
 
+        replaceable = ['latitudeDisplacement', 'longitudeDisplacement']
         sampleOK = True
         for k in fkeys:
             name = f"#{i}#{k}"
@@ -165,8 +175,13 @@ def bufr_decode(f, args):
                 if value != eccodes.CODES_MISSING_DOUBLE:
                     sample[k] = value
                 else:
-                    sampleOK = False
-                    missingValues += 1
+                    if fakeDisplacement and k in replaceable:
+                        #logging.warning(f"--REPLACIING {i} key {k} ")
+                        sample[k] = 0
+                    else:
+                        #logging.warning(f"--MISSING {i} key {k} ")
+                        sampleOK = False
+                        missingValues += 1
             except Exception as e:
                 sampleOK = False
                 logging.debug(f"sample={i} key={k} e={e}, skipping")

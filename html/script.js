@@ -9,6 +9,7 @@ var map = L.map('map', {
 });
 
 var url = 'https://radiosonde.mah.priv.at/data/summary.geojson';
+var datapath = 'https://radiosonde.mah.priv.at/data/';
 
 var geojsonMarkerOptions = {
     radius: 8,
@@ -26,18 +27,31 @@ var target = base.abs("#330066 ", maxHrs);
 
 function onEachFeature(feature, layer) {
     console.log("onEachFeature", feature, layer);
-    var popupContent = "<b>" + feature.properties.name + "</b>" + "<b>  " +
-        new Date(feature.properties.ascents[0].firstSeen * 1000).toLocaleString(undefined, {
-            year: 'numeric',
-            month: 'numeric',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        }) + "</b>";
-
-    layer.bindPopup(popupContent);
 }
 
+function mouseover(l) {
+    var f = l.sourceTarget.feature;
+    var p = datapath + f.properties.ascents[0].path;
+    //debugger;
+
+    $.getJSON(p, { name: "John", time: "2pm" }, function(geojson, l) {
+        debugger;
+        var lineCoordinate = [];
+        for(var i in geojson.features){
+          var pointJson = geojson.features[i];
+          var coord = pointJson.geometry.coordinates;
+          lineCoordinate.push([coord[1],coord[0]]);
+        }
+        //debugger;
+        L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
+    });
+
+}
+
+function clicked(l) {
+    //debugger;
+    console.log("clicked", l);
+}
 
 $.getJSON(url, function(data) {
     L.geoJson(data, {
@@ -48,11 +62,25 @@ $.getJSON(url, function(data) {
             age = Math.round(Math.min((now - ts) / 3600, maxHrs - 1));
             geojsonMarkerOptions.fillColor = target.get(age).getHex();
 
-            //L.bindPopup(feature.properties.name);
+            marker = L.circleMarker(latlng, geojsonMarkerOptions);
 
-            return L.circleMarker(latlng, geojsonMarkerOptions);
-        },
-        onEachFeature: onEachFeature
+            var content = "<b>" + feature.properties.name + "</b>" + "<b>  " +
+                new Date(feature.properties.ascents[0].firstSeen * 1000).toLocaleString(undefined, {
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                }) + "</b>";
+
+            marker.bindTooltip(content).openTooltip()
+            .on('click', clicked)
+            .on('mouseover', mouseover);
+
+
+            return marker;
+        }
+        //, onEachFeature: onEachFeature
 
     }).addTo(map);
 });

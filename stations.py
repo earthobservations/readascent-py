@@ -1,12 +1,18 @@
 
-from math import cos, asin, sqrt
 import os
 import sys
 import csv
 import re
 import geojson
 import json
-import brotli
+
+def newer(filename, ext2):
+    (fn, ext) = os.path.splitext(os.path.basename(filename))
+    target = fn + ext2
+    if not os.path.exists(target):
+        return True
+    return os.path.getmtime(filename) > os.path.getmtime(target)
+
 
 def initialize_stations(filename):
     US_STATES = ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID",
@@ -17,7 +23,6 @@ def initialize_stations(filename):
     stations = geojson.FeatureCollection([])
     stationdict = dict()
     with open(filename, 'r') as csvfile:
-        #print("Running station initializer...")
         stndata = csv.reader(csvfile, delimiter='\t')
         for row in stndata:
             m = re.match(r"(?P<stn_wmoid>^\w+)\s+(?P<stn_lat>\S+)\s+(?P<stn_lon>\S+)\s+(?P<stn_altitude>\S+)(?P<stn_name>\D+)" , row[0])
@@ -34,38 +39,22 @@ def initialize_stations(filename):
             stn_lon = float(fields['stn_lon'])
             stn_altitude = float(fields['stn_altitude'])
 
-
-            #print(stn_wmoid, stn_lat, stn_lon, stn_name, stn_altitude)
-
-            if stn_altitude != -998.8:
+            if stn_altitude > -998.8:
                 stationdict[stn_wmoid] = {
                     "name":  stn_name,
                     "lat": stn_lat,
                     "lon" : stn_lon,
                     "elevation": stn_altitude
                 }
-                # point = geojson.Point((stn_lon, stn_lat, stn_altitude))
-                # properties = {
-                #     "wmo_id": stn_wmoid,
-                #     "name":  stn_name
-                # }
-                # feature = geojson.Feature(geometry=point,
-                #               properties=properties)
-                # stations.features.append(feature)
 
         (fn, ext) = os.path.splitext(os.path.basename(filename))
         with open(f'{fn}.json', 'wb') as jfile:
             j = json.dumps(stationdict, indent=4).encode("utf8")
-            #cmp = brotli.compress(gj)
             jfile.write(j)
-
-        if False:
-            with open(f'{fn}.geojson', 'wb') as gjfile:
-                gj = geojson.dumps(stations, indent=4).encode("utf8")
-                #cmp = brotli.compress(gj)
-                gjfile.write(gj)
-        #print(len(gj), "-->",len(cmp))
 
 
 if __name__ == '__main__':
-    initialize_stations(sys.argv[1])
+    fn = "station_list.txt"
+    if newer(fn, ".json"):
+        print("time to rebuild")
+        initialize_stations(fn)

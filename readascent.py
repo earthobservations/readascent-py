@@ -248,8 +248,7 @@ def convert_to_geojson(args, h, samples):
     properties = {
         "station_id":  id,
         "id_type":  typ,
-        # "syn_date": h['typicalDate'],
-        # "syn_time": h['typicalTime'],
+        "path_type" : "reported",
         "syn_timestamp": ts,
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],

@@ -1,33 +1,48 @@
-#  This program was automatically generated with bufr_dump -Dpython
-#  Using ecCodes version: 2.19.1
-#
-# bufr_dump -Dpython A_IUSD02LOWM210300_C_EDZW_20210121040000_59339751.bin >dump.py
-# and hand edited.
 
-import traceback
-import sys
-from eccodes import *
+#import warnings
+# warnings.filterwarnings("ignore")
+
 import argparse
-import orjson
-import geojson
-import logging
-import datetime
-import os
-from math import atan, sin, cos
 import brotli
-import pathlib
-import zipfile
-import tempfile
 import ciso8601
-from pprint import pprint
+import geojson
+import gzip
+import json
+import logging
+import numpy as np
+import orjson
+import os
+import pathlib
+import pytz
+import sys
+import tempfile
+import traceback
+import zipfile
+import csv
+import re
+
+from datetime import datetime, timezone, timedelta, date
+from eccodes import *
+from math import atan, sin, cos
+from math import cos, pi, isnan
+from netCDF4 import Dataset
 from operator import itemgetter
+from pprint import pprint
+from scipy.interpolate import interp1d
 from string import punctuation
+# lifted from https://github.com/tjlang/SkewT
+from thermodynamics import barometric_equation_inv
+
 
 earth_avg_radius = 6371008.7714
 earth_gravity = 9.80665
+mperdeg = 111320.0
+rad = 4.0 * atan(1) / 180.
 
-MAX_FLIGHT_DURATION = 3600*5  # rather unlikely
-FAKE_TIME_STEPS = 30 # assume 30sec update interval
+ASCENT_RATE = 5  # m/s = 300m/min
+
+MAX_FLIGHT_DURATION = 3600 * 5  # rather unlikely
+FAKE_TIME_STEPS = 30  # assume 30sec update interval
 
 # metpy is terminally slow, so roll our own sans dimension checking
 
@@ -49,6 +64,7 @@ class OneLineExceptionFormatter(logging.Formatter):
             s = s.replace('\n', '') + '|'
         return s
 
+
 class MissingKeyError(Exception):
     def __init__(self, key, message="missing required key"):
         self.key = key
@@ -57,6 +73,7 @@ class MissingKeyError(Exception):
 
     def __str__(self):
         return f'{self.key} -> {self.message}'
+
 
 def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
 
@@ -126,7 +143,7 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
 
     # special-case warts we do not really care about
     warts = ['shipOrMobileLandStationIdentifier'
-            ]
+             ]
 
     for k in warts:
         try:
@@ -134,21 +151,21 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
         except Exception:
             missingHdrKeys += 1
 
-    fkeys = [ # 'extendedVerticalSoundingSignificance',
-            'pressure',
-            'nonCoordinateGeopotentialHeight',
-            'latitudeDisplacement',
-            'longitudeDisplacement',
-            'airTemperature',
-            'dewpointTemperature',
-            'windDirection',
-            'windSpeed']
+    fkeys = [  # 'extendedVerticalSoundingSignificance',
+        'pressure',
+        'nonCoordinateGeopotentialHeight',
+        'latitudeDisplacement',
+        'longitudeDisplacement',
+        'airTemperature',
+        'dewpointTemperature',
+        'windDirection',
+        'windSpeed']
 
     samples = []
     invalidSamples = 0
     missingValues = 0
     fakeTimeperiod = 0
-    fixups = []  #report once only
+    fixups = []  # report once only
 
     for i in range(1, num_samples + 1):
         sample = dict()
@@ -164,7 +181,8 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
                 timePeriod = fakeTimeperiod
                 fakeTimeperiod += FAKE_TIME_STEPS
                 if not k in fixups:
-                    logging.debug(f"--FIXUP timePeriod fakeTimes:{fakeTimes} fakeTimeperiod={fakeTimeperiod}")
+                    logging.debug(
+                        f"--FIXUP timePeriod fakeTimes:{fakeTimes} fakeTimeperiod={fakeTimeperiod}")
                     fixups.append(k)
 
         sample[k] = timePeriod
@@ -203,10 +221,7 @@ def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
     return header, samples
 
 
-rad = 4.0 * atan(1) / 180.
-
-
-def winds_to_UV(windSpeed, windDirection):
+def wind_to_UV(windSpeed, windDirection):
     u = -windSpeed * sin(rad * windDirection)
     v = -windSpeed * cos(rad * windDirection)
     return u, v
@@ -227,18 +242,20 @@ def gen_id(h):
 
     return ("location", f"{h['latitude']:.3f}:{h['longitude']:.3f}")
 
+
 def add_if_present(d, h, name, bname):
     if bname in h:
         d[name] = h[bname]
 
+
 def convert_to_geojson(args, h, samples):
-    takeoff = datetime.datetime(year=h['year'],
-                                month=h['month'],
-                                day=h['day'],
-                                minute=h['minute'],
-                                hour=h['hour'],
-                                second=h['second'],
-                                tzinfo=None)
+    takeoff = datetime(year=h['year'],
+                       month=h['month'],
+                       day=h['day'],
+                       minute=h['minute'],
+                       hour=h['hour'],
+                       second=h['second'],
+                       tzinfo=None)
 
     typ, id = gen_id(h)
 
@@ -248,7 +265,7 @@ def convert_to_geojson(args, h, samples):
     properties = {
         "station_id":  id,
         "id_type":  typ,
-        "path_type" : "reported",
+        "path_type": "reported",
         "syn_timestamp": ts,
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],
@@ -256,7 +273,8 @@ def convert_to_geojson(args, h, samples):
     }
     add_if_present(properties, h, "sonde_type", 'radiosondeType')
     add_if_present(properties, h, "sonde_serial", 'radiosondeSerialNumber')
-    add_if_present(properties, h, "sonde_frequency", 'radiosondeOperatingFrequency')
+    add_if_present(properties, h, "sonde_frequency",
+                   'radiosondeOperatingFrequency')
 
     # try hard to determine a reasonable takeoff elevation value
     if 'height' in h:
@@ -282,7 +300,7 @@ def convert_to_geojson(args, h, samples):
         lon = lon_t + s['longitudeDisplacement']
         gpheight = s['nonCoordinateGeopotentialHeight']
 
-        delta = datetime.timedelta(seconds=s['timePeriod'])
+        delta = timedelta(seconds=s['timePeriod'])
         sampleTime = takeoff + delta
 
         height = geopotential_height_to_height(gpheight)
@@ -290,17 +308,7 @@ def convert_to_geojson(args, h, samples):
             continue
         previous_elevation = height
 
-        u, v = winds_to_UV(s['windSpeed'], s['windDirection'])
-        if args.winds_dir_speed:
-            winds = {
-                "wdir": s['windDirection'],
-                "wspeed": s['windSpeed']
-            }
-        else:
-            winds = {
-                "wind_u": u,
-                "wind_v": v
-            }
+        u, v = wind_to_UV(s['windSpeed'], s['windDirection'])
 
         properties = {
             "time": sampleTime.timestamp(),
@@ -308,25 +316,22 @@ def convert_to_geojson(args, h, samples):
             "temp": s['airTemperature'],
             "dewpoint": s['dewpointTemperature'],
             "pressure": s['pressure'],
+            "wind_u": u,
+            "wind_v": v
         }
         f = geojson.Feature(geometry=geojson.Point((lon, lat, height)),
-                            properties={**properties, **winds})
+                            properties=properties)
         fc.features.append(f)
     fc.properties['lastSeen'] = sampleTime.timestamp()
 
-    duration = fc.properties['lastSeen']  - fc.properties['firstSeen']
+    duration = fc.properties['lastSeen'] - fc.properties['firstSeen']
     if duration > MAX_FLIGHT_DURATION:
         logging.error(f"--- unreasonably long flight: {(duration/3600):.1f} hours")
 
     return fc
 
 
-def gen_czml(fc):
-    logging.warning(f"not implemented yet")
-
-
 updated_stations = []
-
 
 def gen_output(args, h, s, fn, zip):
     h['samples'] = s
@@ -345,11 +350,10 @@ def gen_output(args, h, s, fn, zip):
     if not 'second' in h:
         h['second'] = 0  # dont care
 
-
     fc = convert_to_geojson(args, h, s)
-    fc.properties['origin_fn'] = fn
+    fc.properties['origin_member'] = fn
     if zip:
-        fc.properties['origin_zip'] = pathlib.PurePath(zip).name
+        fc.properties['origin_archive'] = pathlib.PurePath(zip).name
     station_id = fc.properties['station_id']
     logging.debug(
         f'output samples retained: {len(fc.features)}, station id={station_id}')
@@ -361,19 +365,17 @@ def gen_output(args, h, s, fn, zip):
         cext = ".br"
 
     cc = station_id[:2]
-    day = fc.properties['syn_date']
-    time = fc.properties['syn_time']
 
-    if args.by_basename:
-        dest = f'{args.destdir}/{fn}.geojson{cext}'
-        ref = f'{fn}.geojson'
-    else:
-        dest = f'{args.destdir}/{cc}/{station_id}_{day}_{time}.geojson{cext}'
-        ref = f'{cc}/{station_id}_{day}_{time}.geojson'
+    syn_time = datetime.utcfromtimestamp(
+        fc.properties['syn_timestamp']).replace(tzinfo=pytz.utc)
+    day = syn_time.strftime("%Y%m%d")
+    time = syn_time.strftime("%H%M%S")
 
-    if args.mkdirs:
-        path = pathlib.Path(dest).parent.absolute()
-        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+    dest = f'{args.destdir}/{cc}/{station_id}_{day}_{time}.geojson{cext}'
+    ref = f'{cc}/{station_id}_{day}_{time}.geojson'
+
+    path = pathlib.Path(dest).parent.absolute()
+    pathlib.Path(path).mkdir(parents=True, exist_ok=True)
 
     gj = geojson.dumps(fc).encode("utf8")
     if args.geojson:
@@ -386,11 +388,10 @@ def gen_output(args, h, s, fn, zip):
 
     fc.properties['path'] = ref
     if args.dump_geojson:
-        #js = orjson.dumps(fc, option=orjson.OPT_INDENT_2)
         pprint(fc)
 
 
-def process(args, f, fn, zip):
+def process_bufr(args, f, fn, zip):
     try:
         (h, s) = bufr_decode(f, args)
 
@@ -401,7 +402,6 @@ def process(args, f, fn, zip):
         traceback.print_exc(file=sys.stderr)
     else:
         gen_output(args, h, s, fn, zip)
-
 
 
 def update_summary(args, updated_stations):
@@ -486,6 +486,355 @@ def json2geojson(sj):
     return geojson.dumps(fc, indent=4)
 
 
+def winds_to_UV(windSpeeds, windDirection):
+    u = []
+    v = []
+    for i, wdir in enumerate(windDirection):
+        rad = 4.0 * np.arctan(1) / 180.
+        u.append(-windSpeeds[i] * np.sin(rad * wdir))
+        v.append(-windSpeeds[i] * np.cos(rad * wdir))
+    return np.array(u), np.array(v)
+
+
+def basic_qc(Ps, T, Td, U, V):
+    # remove the weird entries that give TOA pressure at the start of the array
+    Ps = np.round(Ps[np.where(Ps > 100)], 2)
+    T = np.round(T[np.where(Ps > 100)], 2)
+    Td = np.round(Td[np.where(Ps > 100)], 2)
+    U = np.round(U[np.where(Ps > 100)], 2)
+    V = np.round(V[np.where(Ps > 100)], 2)
+
+    U[np.isnan(U)] = -9999
+    V[np.isnan(V)] = -9999
+    Td[np.isnan(Td)] = -9999
+    T[np.isnan(T)] = -9999
+    Ps[np.isnan(Ps)] = -9999
+
+    if T.size != 0:
+        if T[0] < 200 or T[0] > 330 or np.isnan(T).all():
+            Ps = np.array([])
+            T = np.array([])
+            Td = np.array([])
+            U = np.array([])
+            V = np.array([])
+
+    if not isinstance(Ps, list):
+        Ps = Ps.tolist()
+    if not isinstance(T, list):
+        T = T.tolist()
+    if not isinstance(Td, list):
+        Td = Td.tolist()
+    if not isinstance(U, list):
+        U = U.tolist()
+    if not isinstance(V, list):
+        V = V.tolist()
+
+    return Ps, T, Td, U, V
+
+
+def RemNaN_and_Interp(raob):
+    P_allstns = []
+    T_allstns = []
+    Td_allstns = []
+    times_allstns = []
+    U_allstns = []
+    V_allstns = []
+    wmo_ids_allstns = []
+    relTime_allstns = []
+    sondTyp_allstns = []
+    staLat_allstns = []
+    staLon_allstns = []
+    staElev_allstns = []
+
+    for i, stn in enumerate(raob['Psig']):
+        Ps = raob['Psig'][i]
+        Ts = raob['Tsig'][i]
+        Tds = raob['Tdsig'][i]
+        Tm = raob['Tman'][i]
+        Tdm = raob['Tdman'][i]
+        Pm = raob['Pman'][i]
+        Ws = raob['Wspeed'][i]
+        Wd = raob['Wdir'][i]
+
+        if len(Pm) > 10 and len(Ps) > 10:
+            u, v = winds_to_UV(Ws, Wd)
+
+            PmTm = zip(Pm, Tm)
+            PsTs = zip(Ps, Ts)
+            PmTdm = zip(Pm, Tdm)
+            PsTds = zip(Ps, Tds)
+
+            PT = []
+            PTd = []
+            for pmtm in PmTm:
+                PT.append(pmtm)
+            for psts in PsTs:
+                PT.append(psts)
+            for pmtdm in PmTdm:
+                PTd.append(pmtdm)
+            for pstds in PsTds:
+                PTd.append(pstds)
+
+            PT = [x for x in PT if all(i == i for i in x)]
+            PTd = [x for x in PTd if all(i == i for i in x)]
+
+            PT = sorted(PT, key=lambda x: x[0])
+            PT = PT[::-1]
+            PTd = sorted(PTd, key=lambda x: x[0])
+            PTd = PTd[::-1]
+
+            if len(PT) != 0 and len(PTd) > 10:
+                P, T = zip(*PT)
+                Ptd, Td = zip(*PTd)
+                P = np.array(P)
+                P = P.astype(int)
+                T = np.array(T)
+                Td = np.array(Td)
+
+                f = interp1d(Ptd, Td, kind='linear', fill_value="extrapolate")
+                Td = f(P)
+                f = interp1d(Pm, u, kind='linear', fill_value="extrapolate")
+                U = f(P)
+                f = interp1d(Pm, v, kind='linear', fill_value="extrapolate")
+                V = f(P)
+
+                U = U * 1.94384
+                V = V * 1.94384
+
+                Pqc, Tqc, Tdqc, Uqc, Vqc = basic_qc(P, T, Td, U, V)
+
+                if len(Pqc) != 0:
+                    P_allstns.append(Pqc)
+                    T_allstns.append(Tqc)
+                    Td_allstns.append(Tdqc)
+                    U_allstns.append(Uqc)
+                    V_allstns.append(Vqc)
+                    wmo_ids_allstns.append(raob['wmo_ids'][i])
+                    times_allstns.append(raob['times'][i])
+                    relTime_allstns.append(raob['relTime'][i])
+                    sondTyp_allstns.append(raob['sondTyp'][i])
+                    staLat_allstns.append(raob['staLat'][i])
+                    staLon_allstns.append(raob['staLon'][i])
+                    staElev_allstns.append(raob['staElev'][i])
+
+    return (relTime_allstns, sondTyp_allstns, staLat_allstns, staLon_allstns, staElev_allstns,
+            P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns)
+
+# very simplistic
+
+
+def height2time(h0, height):
+    hdiff = height - h0
+    return hdiff / ASCENT_RATE
+
+
+mperdeg = 111320.0
+
+
+def latlonPlusDisplacement(lat=0, lon=0, u=0, v=0):
+    # HeidiWare
+    dLat = v / mperdeg
+    dLon = u / (cos((lat + dLat / 2) / 180 * pi) * mperdeg)
+    return lat + dLat, lon + dLon
+
+
+earth_avg_radius = 6371008.7714
+earth_gravity = 9.80665
+
+
+def height_to_geopotential_height(height):
+    return earth_gravity / ((1 / height) + 1 / earth_avg_radius) / earth_gravity
+
+
+def commit_sonde(raob, stations):
+    relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
+        raob)
+    # print(staElev)
+    for i, stn in enumerate(wmo_ids):
+
+        if stn in stations:
+            station = stations[stn]
+#            print(f"---- station {stn} found: {station}")
+            if isnan(staLat[i]):
+                staLat[i] = station['lat']
+            if isnan(staLon[i]):
+                staLon[i] = station['lon']
+            if isnan(staElev[i]):
+                staElev[i] = station['elevation']
+        else:
+            #            print(f"station {stn} not found")
+            station = None
+
+        if isnan(staLat[i]) or isnan(staLon[i]) or isnan(staElev[i]):
+            continue
+
+        #print(i, stn)
+        takeoff = datetime.utcfromtimestamp(
+            relTime[i]).replace(tzinfo=pytz.utc)
+        syntime = times[i]
+        properties = {
+            "station_id":  stn,
+            "id_type":  "madis",
+            "sonde_type": int(sondTyp[i]),
+            "path_type": "simulated",
+            "syn_timestamp": syntime.timestamp(),
+            "firstSeen": float(relTime[i]),
+            "lat": float(staLat[i]),
+            "lon": float(staLon[i]),
+            "elevation": float(staElev[i]),
+        }
+        fc = geojson.FeatureCollection([])
+        fc.properties = properties
+
+        lat_t = staLat[i]
+        lon_t = staLon[i]
+        previous_elevation = fc.properties['elevation'] - 100  # args.hstep
+
+        t0 = T[i][0]
+        p0 = P[i][0]
+        h0 = staElev[i]
+
+        prevSecsIntoFlight = 0
+        for n in range(0, len(P[i])):
+            pn = P[i][n]
+
+            # gross haque to determine rough time of sample
+            height = round(barometric_equation_inv(h0, t0, p0, pn), 1)
+            secsIntoFlight = height2time(h0, height)
+            delta = timedelta(seconds=secsIntoFlight)
+            sampleTime = takeoff + delta
+
+            properties = {
+                "time": sampleTime.timestamp(),
+                "gpheight": round(height_to_geopotential_height(height), 1),
+                "temp": round(T[i][n], 2),
+                "dewpoint": round(Td[i][n], 2),
+                "pressure": P[i][n],
+            }
+            u = U[i][n]
+            v = V[i][n]
+            du = dv = 0
+            if u > -9999.0 and v > -9999.0:
+                properties["wind_u"] = u
+                properties["wind_v"] = v
+                dt = secsIntoFlight - prevSecsIntoFlight
+                du = u * dt
+                dv = v * dt
+                lat_t, lon_t = latlonPlusDisplacement(
+                    lat=lat_t, lon=lon_t, u=du, v=dv)
+                prevSecsIntoFlight = secsIntoFlight
+
+            print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
+
+            f = geojson.Feature(geometry=geojson.Point((float(lat_t), float(lon_t), height)),
+                                properties=properties)
+            fc.features.append(f)
+        fc.properties['lastSeen'] = sampleTime.timestamp()
+        # print(fc)
+        #print(geojson.dumps(fc, indent=4, ignore_nan=True))
+        print("yeeahw")
+        #sys.exit(0)
+
+
+def extract_madis_data(file, stationdict):
+
+    with gzip.open(file, 'rb') as f:
+        nc = Dataset('inmemory.nc', memory=f.read())
+
+        relTime = nc.variables['relTime'][:].filled(fill_value=np.nan)
+        sondTyp = nc.variables['sondTyp'][:].filled(fill_value=np.nan)
+        staLat = nc.variables['staLat'][:].filled(fill_value=np.nan)
+        staLon = nc.variables['staLon'][:].filled(fill_value=np.nan)
+        staElev = nc.variables['staElev'][:].filled(fill_value=np.nan)
+
+        Tman = nc.variables['tpMan'][:].filled(fill_value=np.nan)
+        DPDman = nc.variables['tdMan'][:].filled(fill_value=np.nan)
+        wmo_ids = nc.variables['wmoStaNum'][:].filled(fill_value=np.nan)
+
+        DPDsig = nc.variables['tdSigT'][:].filled(fill_value=np.nan)
+        Tsig = nc.variables['tpSigT'][:].filled(fill_value=np.nan)
+        synTimes = nc.variables['synTime'][:].filled(fill_value=np.nan)
+        Psig = nc.variables['prSigT'][:].filled(fill_value=np.nan)
+        Pman = nc.variables['prMan'][:].filled(fill_value=np.nan)
+        #print(len(wmo_ids), wmo_ids, synTimes)
+
+        Wspeed = nc.variables['wsMan'][:].filled(fill_value=np.nan)
+        Wdir = nc.variables['wdMan'][:].filled(fill_value=np.nan)
+        raob = {
+            "relTime": relTime,
+            "sondTyp": sondTyp,
+            "staLat": staLat,
+            "staLon": staLon,
+            "staElev": staElev,
+
+            "Tsig": Tsig,
+            "Tdsig": Tsig - DPDsig,
+            "Tman": Tman,
+            "Psig": Psig,
+            "Pman": Pman,
+            "Tdman": Tman - DPDman,
+            "Wspeed": Wspeed,
+            "Wdir": Wdir,
+            "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
+            "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
+        }
+        commit_sonde(raob, stationdict)
+
+
+#     extract_madis_data('20210204_1100.gz', 'station_list.json')
+
+def newer(filename, ext):
+    """
+        given a file like foo.ext and an extension like .json,
+        return True if:
+            foo.json does not exist or
+            foo.json has an older modification time than foo.ext
+    """
+    (fn, e) = os.path.splitext(os.path.basename(filename))
+    target = fn + ext
+    if not os.path.exists(target):
+        return True
+    return os.path.getmtime(filename) > os.path.getmtime(target)
+
+
+def initialize_stations(filename):
+    US_STATES = ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID",
+                 "IL", "IN", "KS","LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC",
+                 "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD",
+                 "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY"]
+
+    stations = geojson.FeatureCollection([])
+    stationdict = dict()
+    with open(filename, 'r') as csvfile:
+        stndata = csv.reader(csvfile, delimiter='\t')
+        for row in stndata:
+            m = re.match(r"(?P<stn_wmoid>^\w+)\s+(?P<stn_lat>\S+)\s+(?P<stn_lon>\S+)\s+(?P<stn_altitude>\S+)(?P<stn_name>\D+)" , row[0])
+            fields = m.groupdict()
+            stn_wmoid = fields['stn_wmoid'][6:]
+            stn_name = fields['stn_name'].strip()
+
+            if re.match(r"^[a-zA-Z]{2}\s", stn_name) and  stn_name[:2] in US_STATES:
+                stn_name = stn_name[2:].strip().title() + ", " + stn_name[:2]
+            else:
+                stn_name = stn_name.title()
+            stn_name = fields['stn_name'].strip().title()
+            stn_lat = float(fields['stn_lat'])
+            stn_lon = float(fields['stn_lon'])
+            stn_altitude = float(fields['stn_altitude'])
+
+            if stn_altitude > -998.8:
+                stationdict[stn_wmoid] = {
+                    "name":  stn_name,
+                    "lat": stn_lat,
+                    "lon" : stn_lon,
+                    "elevation": stn_altitude
+                }
+
+        (fn, ext) = os.path.splitext(os.path.basename(filename))
+        with open(f'{fn}.json', 'wb') as jfile:
+            j = json.dumps(stationdict, indent=4).encode("utf8")
+            jfile.write(j)
+
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',
                                      add_help=True)
@@ -498,10 +847,8 @@ def main():
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--brotli', action='store_true', default=False)
-    parser.add_argument('--by-basename', action='store_true', default=False)
-    parser.add_argument('--mkdirs', action='store_true', default=False)
     parser.add_argument('--summary', action='store', default=None)
-    parser.add_argument('--stations', action='store', default=None)
+    parser.add_argument('--stations', action='store', required=True, help="path to station_list.txt file")
     parser.add_argument('--tmpdir', action='store', default="/tmp")
     parser.add_argument('files', nargs='*')
 
@@ -517,14 +864,29 @@ def main():
     # root.setFormatter(f)
 
     logging.basicConfig(level=level)
-
     os.umask(0o22)
+
+    # read the station_list.json file
+    # create or update if needed from station_list.txt (same dir)
+    (fn, ext) = os.path.splitext(os.path.basename(args.stations))
+    jstations = fn + ".json"
+    if newer(args.stations, ".json"):
+        # rebuild the json file
+        initialize_stations(args.stations)
+        logging.debug(f'rebuilt {jstations} from {args.stations}')
+
+    with open(jstations, 'rb') as f:
+        s = f.read().decode()
+        stations = orjson.loads(s)
+        logging.debug(f'read stations from {jstations}')
+
+    #sys.exit(0)
 
     for f in args.files:
         (fn, ext) = os.path.splitext(os.path.basename(f))
         #logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
-        if ext == '.zip':
+        if ext == '.zip':  # a BUFR archive
             zf = zipfile.ZipFile(f)
             for info in zf.infolist():
                 try:
@@ -540,13 +902,16 @@ def main():
                 else:
                     #logging.debug(f"processing: {info.filename} from {f}")
                     (bn, ext) = os.path.splitext(info.filename)
-                    process(args, file, info.filename, f)
+                    process_bufr(args, file, info.filename, f)
                     file.close()
                     os.remove(path)
-        else:
+        elif ext == '.bin':   # a BUFR file
             file = open(f, 'rb')
-            process(args, file, f, None)
+            process_bufr(args, file, f, None)
             file.close()
+        elif ext == '.gz':  # a gzipped netCDF file
+            extract_madis_data(f, stations)
+
 
     if args.summary:
         update_summary(args, updated_stations)

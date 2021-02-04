@@ -1,5 +1,7 @@
+import geojson
 import numpy as np
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from math import cos, pi, isnan
 #from django.utils import timezone
 import pytz
 from io import BytesIO, open
@@ -10,6 +12,13 @@ from scipy.interpolate import interp1d
 #from api.models import Station, Radiosonde, UpdateRecord
 import warnings
 warnings.filterwarnings("ignore")
+# blatantly stolen from https://github.com/tjlang/SkewT
+from thermodynamics import  barometric_equation_inv
+import sys
+import os
+import json
+
+ascent_rate = 5 #m/s = 300m/min
 
 
 def winds_to_UV(windSpeeds, windDirection):
@@ -143,7 +152,6 @@ def RemNaN_and_Interp(raob):
                     staLon_allstns.append(raob['staLon'][i])
                     staElev_allstns.append(raob['staElev'][i])
 
-
     return (relTime_allstns, sondTyp_allstns, staLat_allstns, staLon_allstns, staElev_allstns,
             P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns)
 
@@ -151,16 +159,119 @@ def RemNaN_and_Interp(raob):
 class Radiosonde(object):
     pass
 
+# very simplistic
+def height2time(h0, height):
+    hdiff = height - h0
+    return hdiff / ascent_rate
 
-def commit_sonde(raob):
-    relTime, sondTyp, staLat,staLon,staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
-    #print(len(wmo_ids))
-    # print(nc.variables['wmoStaNum'])
-    print("wmo ids:", wmo_ids, times)
+
+mperdeg = 111320.0
+
+def latlonPlusDisplacement(lat=0, lon=0, u=0, v=0):
+    dLat =  v / mperdeg
+    dLon =  u / (cos((lat + dLat/2) / 180 * pi) * mperdeg)
+    return lat + dLat, lon + dLon
+
+
+def commit_sonde(raob, stations):
+    relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
+        raob)
+    #print(staElev)
     for i, stn in enumerate(wmo_ids):
-        t = datetime.utcfromtimestamp(relTime[i]).replace(tzinfo=pytz.utc)
 
-        print(i, stn, times[i], t)
+        if stn in stations:
+            station = stations[stn]
+#            print(f"---- station {stn} found: {station}")
+            if isnan(staLat[i]):
+                staLat[i] = station['lat']
+            if isnan(staLon[i]):
+                staLon[i] = station['lon']
+            if isnan(staElev[i]):
+                staElev[i] = station['elevation']
+        else:
+#            print(f"station {stn} not found")
+            station = None
+
+        if isnan(staLat[i]) or isnan(staLon[i]) or isnan(staElev[i]):
+            continue
+
+        #print(i, stn)
+        takeoff =  datetime.utcfromtimestamp(relTime[i]).replace(tzinfo=pytz.utc)
+        syntime = times[i]
+        properties = {
+            "station_id":  stn,
+            "id_type":  "madis",
+            "sonde_type": int(sondTyp[i]),
+            # # "syn_date": h['typicalDate'],
+            # # "syn_time": h['typicalTime'],
+            "syn_timestamp": syntime.timestamp(),
+            "firstSeen": float(relTime[i]),
+            "lat": float(staLat[i]),
+            "lon": float(staLon[i]),
+            "elevation": float(staElev[i]),
+        }
+        fc = geojson.FeatureCollection([])
+        fc.properties = properties
+
+        lat_t = staLat[i]
+        lon_t = staLon[i]
+        firstSeen = fc.properties['firstSeen']
+        previous_elevation = fc.properties['elevation'] - 100  # args.hstep
+
+        t0 = T[i][0]
+        p0 = P[i][0]
+        h0 = staElev[i]
+
+        #print(f"station h0={h0:.1f}m p0={p0} t0={t0}")
+        prevSecsIntoFlight  = 0
+        for n in range(0, len(P[i])):
+            pn = P[i][n]
+
+            # gross haque to determine rough time of sample
+            height = round(barometric_equation_inv(h0, t0, p0, pn),1)
+            secsIntoFlight = height2time(h0, height)
+            delta = timedelta(seconds=secsIntoFlight)
+            sampleTime = takeoff + delta
+
+            properties = {
+                "time": sampleTime.timestamp(),
+    #            "gpheight": gpheight,
+                "temp": round(T[i][n],2),
+                "dewpoint": round(Td[i][n], 2),
+                "pressure": P[i][n],
+            }
+            u = U[i][n]
+            v = V[i][n]
+            du = dv = 0
+            if u > -9999.0 and v > -9999.0:
+                properties["wind_u"] = u
+                properties["wind_v"] = v
+                dt = secsIntoFlight - prevSecsIntoFlight
+                du = u * dt
+                dv = v * dt
+                lat_t,lon_t = latlonPlusDisplacement(lat=lat_t, lon=lon_t, u=du, v=dv)
+                prevSecsIntoFlight = secsIntoFlight
+
+            print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
+
+            f = geojson.Feature(geometry=geojson.Point((float(lat_t), float(lon_t), height)),
+                                properties=properties)
+            fc.features.append(f)
+        fc.properties['lastSeen'] = sampleTime.timestamp()
+        #print(fc)
+        print(geojson.dumps(fc, indent=4,ignore_nan=True))
+
+
+
+
+        sys.exit(0)
+
+        # for n in range(len(P[i])-1):
+        #     print(i, n, stn,  T[n], P[n])
+        #     #print(n, P[n])times[i],
+        continue
+        t = datetime.utcfromtimestamp(relTime[i]).replace(tzinfo=pytz.utc)
+        print(i, stn, times[i], t, len(raob['Psig'][i]), len(T[i]), len(P[i]))
         radiosonde = Radiosonde()
         radiosonde.sonde_validtime = times[i]
         radiosonde.temperatureK = T[i]
@@ -172,12 +283,23 @@ def commit_sonde(raob):
         # print(radiosonde)
 
 
-def extract_madis_data(file):
+def extract_madis_data(file, stations):
     # print("Reading {}...".format(file))
     # print("\n\n############################\n")
     # flo = BytesIO()
     # ftp.retrbinary('RETR {}'.format(file), flo.write)
     # flo.seek(0)
+
+
+    if stations and os.path.exists(stations):
+        with open(stations , 'rb') as f:
+            s = f.read().decode()
+            stationdict = json.loads(s)
+            #print(f'read stations from {stations}')
+    else:
+        print("no stations file")
+        stationdict = dict()
+
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
 
@@ -201,8 +323,8 @@ def extract_madis_data(file):
         Wspeed = nc.variables['wsMan'][:].filled(fill_value=np.nan)
         Wdir = nc.variables['wdMan'][:].filled(fill_value=np.nan)
         raob = {
-            "relTime" : relTime,
-            "sondTyp" : sondTyp,
+            "relTime": relTime,
+            "sondTyp": sondTyp,
             "staLat": staLat,
             "staLon": staLon,
             "staElev": staElev,
@@ -218,8 +340,8 @@ def extract_madis_data(file):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        #print(raob)
-        commit_sonde(raob)
+        # print(raob)
+        commit_sonde(raob, stationdict)
 
 
 def read_madis():
@@ -256,7 +378,7 @@ def read_madis():
 
 # def run():
 if __name__ == "__main__":
-    extract_madis_data('20210204_1100.gz')
+    extract_madis_data('20210204_1100.gz', 'station_list.json')
     # extract_madis_data('madis/20210131_0600.gz')
 
     # UpdateRecord.delete_expired(10)

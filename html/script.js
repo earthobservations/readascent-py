@@ -2,7 +2,7 @@ var map = L.map('map', {
     'center': [15, 47],
     'zoom': 3,
     'layers': [
-        L.tileLayer('http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             'attribution': 'Map data &copy; OpenStreetMap contributors'
         })
     ]

@@ -66,6 +66,11 @@ def RemNaN_and_Interp(raob):
     U_allstns = []
     V_allstns = []
     wmo_ids_allstns = []
+    relTime_allstns = []
+    sondTyp_allstns = []
+    staLat_allstns = []
+    staLon_allstns = []
+    staElev_allstns = []
 
     for i, stn in enumerate(raob['Psig']):
         Ps = raob['Psig'][i]
@@ -132,13 +137,15 @@ def RemNaN_and_Interp(raob):
                     V_allstns.append(Vqc)
                     wmo_ids_allstns.append(raob['wmo_ids'][i])
                     times_allstns.append(raob['times'][i])
-        #         else:
-        #             print("drop3:", stn)
-        #     else:
-        #         print("drop2:", stn)
-        # else:
-        #     print("drop1:", stn)
-    return P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns
+                    relTime_allstns.append(raob['relTime'][i])
+                    sondTyp_allstns.append(raob['sondTyp'][i])
+                    staLat_allstns.append(raob['staLat'][i])
+                    staLon_allstns.append(raob['staLon'][i])
+                    staElev_allstns.append(raob['staElev'][i])
+
+
+    return (relTime_allstns, sondTyp_allstns, staLat_allstns, staLon_allstns, staElev_allstns,
+            P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns)
 
 
 class Radiosonde(object):
@@ -146,12 +153,14 @@ class Radiosonde(object):
 
 
 def commit_sonde(raob):
-    P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
-    print(len(wmo_ids))
+    relTime, sondTyp, staLat,staLon,staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
+    #print(len(wmo_ids))
     # print(nc.variables['wmoStaNum'])
     print("wmo ids:", wmo_ids, times)
     for i, stn in enumerate(wmo_ids):
-        print(i, times[i])
+        t = datetime.utcfromtimestamp(relTime[i]).replace(tzinfo=pytz.utc)
+
+        print(i, stn, times[i], t)
         radiosonde = Radiosonde()
         radiosonde.sonde_validtime = times[i]
         radiosonde.temperatureK = T[i]
@@ -197,6 +206,7 @@ def extract_madis_data(file):
             "staLat": staLat,
             "staLon": staLon,
             "staElev": staElev,
+
             "Tsig": Tsig,
             "Tdsig": Tsig - DPDsig,
             "Tman": Tman,
@@ -208,7 +218,7 @@ def extract_madis_data(file):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        # print(raob)
+        #print(raob)
         commit_sonde(raob)
 
 

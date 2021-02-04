@@ -172,6 +172,15 @@ def latlonPlusDisplacement(lat=0, lon=0, u=0, v=0):
     dLon =  u / (cos((lat + dLat/2) / 180 * pi) * mperdeg)
     return lat + dLat, lon + dLon
 
+earth_avg_radius = 6371008.7714
+earth_gravity = 9.80665
+
+def geopotential_height_to_height(gph):
+    geopotential = gph * earth_gravity
+    return (geopotential * earth_avg_radius) / (earth_gravity * earth_avg_radius - geopotential)
+
+def height_to_geopotential_height(height):
+    return earth_gravity/((1/height) + 1/earth_avg_radius)/earth_gravity
 
 def commit_sonde(raob, stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
@@ -235,7 +244,7 @@ def commit_sonde(raob, stations):
 
             properties = {
                 "time": sampleTime.timestamp(),
-    #            "gpheight": gpheight,
+                "gpheight": round(height_to_geopotential_height(height),1),
                 "temp": round(T[i][n],2),
                 "dewpoint": round(Td[i][n], 2),
                 "pressure": P[i][n],

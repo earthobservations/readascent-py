@@ -29,22 +29,66 @@ function onEachFeature(feature, layer) {
     console.log("onEachFeature", feature, layer);
 }
 
+function do_something_with_data(data, l) {
+    debugger;
+    l.sourceTarget.feature.properties.ascents[0].data = data;
+    console.log(data, l);
+}
+
 function mouseover(l) {
     var f = l.sourceTarget.feature;
     var p = datapath + f.properties.ascents[0].path;
     //debugger;
 
-    $.getJSON(p, { name: "John", time: "2pm" }, function(geojson, l) {
-        debugger;
-        var lineCoordinate = [];
-        for(var i in geojson.features){
-          var pointJson = geojson.features[i];
-          var coord = pointJson.geometry.coordinates;
-          lineCoordinate.push([coord[1],coord[0]]);
-        }
-        //debugger;
-        L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
-    });
+    if (!f.properties.ascents[0].hasOwnProperty('data')) {
+
+        $.getJSON(p,
+            (function(thisl) {
+                return function(data) {
+                    do_something_with_data(data, thisl);
+                    // Break the closure over `i` via the parameter `thisi`,
+                    // which will hold the correct value from *invocation* time.
+                };
+            }(l)) // calling the function with the current value
+        );
+    }
+    else {
+        console.log("already loaded", f.properties.ascents[0].data);
+    }
+
+    // $.getJSON(
+    //     p,
+    //     (function(thisl) {
+    //         return function(data) {
+    //             do_something_with_data(data, thisl);
+    //             // Break the closure over `i` via the parameter `thisi`,
+    //             // which will hold the correct value from *invocation* time.
+    //         };
+    //     }(l)) // calling the function with the current value
+    // );
+
+    //   $.getJSON(p, { blah: "FASEL"})
+    //   .done(function( json ) {
+    //       debugger;
+    //     console.log( "JSON Data: ");
+    //   })
+    //   .fail(function( jqxhr, textStatus, error ) {
+    //     var err = textStatus + ", " + error;
+    //     console.log( "Request Failed: " + err );
+    // });
+
+
+    // $.getJSON(p, { name: "John", time: "2pm" }, function(geojson, l) {
+    //     debugger;
+    //     var lineCoordinate = [];
+    //     for(var i in geojson.features){
+    //       var pointJson = geojson.features[i];
+    //       var coord = pointJson.geometry.coordinates;
+    //       lineCoordinate.push([coord[1],coord[0]]);
+    //     }
+    //     //debugger;
+    //     L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
+    // });
 
 }
 
@@ -74,8 +118,8 @@ $.getJSON(url, function(data) {
                 }) + "</b>";
 
             marker.bindTooltip(content).openTooltip()
-            .on('click', clicked)
-            .on('mouseover', mouseover);
+                .on('click', clicked)
+                .on('mouseover', mouseover);
 
 
             return marker;

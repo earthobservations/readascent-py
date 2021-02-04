@@ -25,88 +25,47 @@ var maxHrs = 40;
 var target = base.abs("#330066 ", maxHrs);
 
 
-function onEachFeature(feature, layer) {
-    console.log("onEachFeature", feature, layer);
-}
-
-function do_something_with_data(geojson, l) {
-    //debugger;
+function drawpath(geojson, l) {
+    // record for later, and maybe a skewt on click
     l.sourceTarget.feature.properties.ascents[0].data = geojson;
 
-
-        var lineCoordinate = [];
-        for(var i in geojson.features){
-          var pointJson = geojson.features[i];
-          var coord = pointJson.geometry.coordinates;
-          lineCoordinate.push([coord[1],coord[0]]);
-        }
-        //debugger;
-        L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
-
-
-    console.log(geojson, l);
+    var lineCoordinate = [];
+    for (var i in geojson.features) {
+        var pointJson = geojson.features[i];
+        var coord = pointJson.geometry.coordinates;
+        lineCoordinate.push([coord[1], coord[0]]);
+    }
+    L.polyline(lineCoordinate, {
+        color: 'red'
+    }).addTo(map);
 }
 
 function mouseover(l) {
     var f = l.sourceTarget.feature;
     var p = datapath + f.properties.ascents[0].path;
-    //debugger;
 
     if (!f.properties.ascents[0].hasOwnProperty('data')) {
-
         $.getJSON(p,
-            (function(thisl) {
-                return function(data) {
-                    do_something_with_data(data, thisl);
-                    // Break the closure over `i` via the parameter `thisi`,
-                    // which will hold the correct value from *invocation* time.
+            (function(site) {
+                return function(geojson) {
+                    drawpath(geojson, site);
                 };
-            }(l)) // calling the function with the current value
+            }(l))
         );
-    }
-    else {
-        console.log("already loaded", f.properties.ascents[0].data);
-    }
-
-    // $.getJSON(
-    //     p,
-    //     (function(thisl) {
-    //         return function(data) {
-    //             do_something_with_data(data, thisl);
-    //             // Break the closure over `i` via the parameter `thisi`,
-    //             // which will hold the correct value from *invocation* time.
-    //         };
-    //     }(l)) // calling the function with the current value
-    // );
-
-    //   $.getJSON(p, { blah: "FASEL"})
-    //   .done(function( json ) {
-    //       debugger;
-    //     console.log( "JSON Data: ");
-    //   })
-    //   .fail(function( jqxhr, textStatus, error ) {
-    //     var err = textStatus + ", " + error;
-    //     console.log( "Request Failed: " + err );
-    // });
-
-
-    // $.getJSON(p, { name: "John", time: "2pm" }, function(geojson, l) {
-    //     debugger;
-    //     var lineCoordinate = [];
-    //     for(var i in geojson.features){
-    //       var pointJson = geojson.features[i];
-    //       var coord = pointJson.geometry.coordinates;
-    //       lineCoordinate.push([coord[1],coord[0]]);
-    //     }
-    //     //debugger;
-    //     L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
-    // });
-
+    } // else already loaded
 }
 
 function clicked(l) {
-    //debugger;
-    console.log("clicked", l);
+    let ctx = document.getElementById("chart");
+    // debugger;
+    var f = l.sourceTarget.feature;
+    if (f.properties.ascents[0].hasOwnProperty('data')) {
+        alert("the ascent data is all loaded, but now it needs somebody more competent" +
+            " to actually draw a SkewT diagram.")
+    } else {
+        var p = datapath + f.properties.ascents[0].path;
+        alert("draw a skewT by loading JSON from: " + p);
+    }
 }
 
 $.getJSON(url, function(data) {
@@ -133,10 +92,7 @@ $.getJSON(url, function(data) {
                 .on('click', clicked)
                 .on('mouseover', mouseover);
 
-
             return marker;
         }
-        //, onEachFeature: onEachFeature
-
     }).addTo(map);
 });

@@ -29,10 +29,22 @@ function onEachFeature(feature, layer) {
     console.log("onEachFeature", feature, layer);
 }
 
-function do_something_with_data(data, l) {
-    debugger;
-    l.sourceTarget.feature.properties.ascents[0].data = data;
-    console.log(data, l);
+function do_something_with_data(geojson, l) {
+    //debugger;
+    l.sourceTarget.feature.properties.ascents[0].data = geojson;
+
+
+        var lineCoordinate = [];
+        for(var i in geojson.features){
+          var pointJson = geojson.features[i];
+          var coord = pointJson.geometry.coordinates;
+          lineCoordinate.push([coord[1],coord[0]]);
+        }
+        //debugger;
+        L.polyline(lineCoordinate, {color: 'red'}).addTo(map);
+
+
+    console.log(geojson, l);
 }
 
 function mouseover(l) {

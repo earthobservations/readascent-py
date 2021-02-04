@@ -1,34 +1,34 @@
 import numpy as np
-from datetime import datetime
-from django.utils import timezone
+from datetime import datetime, timezone
+#from django.utils import timezone
 import pytz
 from io import BytesIO, open
 from ftplib import FTP
 from netCDF4 import Dataset
 import gzip
 from scipy.interpolate import interp1d
-from api.models import Station, Radiosonde, UpdateRecord
+#from api.models import Station, Radiosonde, UpdateRecord
 import warnings
 warnings.filterwarnings("ignore")
 
 
-
 def winds_to_UV(windSpeeds, windDirection):
-    u = [];  v = []
-    for i,wdir in enumerate(windDirection):
-        rad = 4.0*np.arctan(1)/180.
-        u.append(-windSpeeds[i] * np.sin(rad*wdir))
-        v.append(-windSpeeds[i] * np.cos(rad*wdir))
+    u = []
+    v = []
+    for i, wdir in enumerate(windDirection):
+        rad = 4.0 * np.arctan(1) / 180.
+        u.append(-windSpeeds[i] * np.sin(rad * wdir))
+        v.append(-windSpeeds[i] * np.cos(rad * wdir))
     return np.array(u), np.array(v)
 
 
 def basic_qc(Ps, T, Td, U, V):
     # remove the weird entries that give TOA pressure at the start of the array
-    Ps = np.round(Ps[np.where(Ps>100)], 2)
-    T = np.round(T[np.where(Ps>100)], 2)
-    Td = np.round(Td[np.where(Ps>100)], 2)
-    U = np.round(U[np.where(Ps>100)], 2)
-    V = np.round(V[np.where(Ps>100)], 2)
+    Ps = np.round(Ps[np.where(Ps > 100)], 2)
+    T = np.round(T[np.where(Ps > 100)], 2)
+    Td = np.round(Td[np.where(Ps > 100)], 2)
+    U = np.round(U[np.where(Ps > 100)], 2)
+    V = np.round(V[np.where(Ps > 100)], 2)
 
     U[np.isnan(U)] = -9999
     V[np.isnan(V)] = -9999
@@ -37,9 +37,12 @@ def basic_qc(Ps, T, Td, U, V):
     Ps[np.isnan(Ps)] = -9999
 
     if T.size != 0:
-        if T[0]<200 or T[0]>330 or np.isnan(T).all():
-            Ps = np.array([]); T = np.array([]); Td = np.array([])
-            U = np.array([]); V = np.array([])
+        if T[0] < 200 or T[0] > 330 or np.isnan(T).all():
+            Ps = np.array([])
+            T = np.array([])
+            Td = np.array([])
+            U = np.array([])
+            V = np.array([])
 
     if not isinstance(Ps, list):
         Ps = Ps.tolist()
@@ -56,10 +59,15 @@ def basic_qc(Ps, T, Td, U, V):
 
 
 def RemNaN_and_Interp(raob):
-    P_allstns = []; T_allstns = []; Td_allstns = []; times_allstns = []
-    U_allstns = []; V_allstns = [];  wmo_ids_allstns = []
+    P_allstns = []
+    T_allstns = []
+    Td_allstns = []
+    times_allstns = []
+    U_allstns = []
+    V_allstns = []
+    wmo_ids_allstns = []
 
-    for i,stn in enumerate(raob['Psig']):
+    for i, stn in enumerate(raob['Psig']):
         Ps = raob['Psig'][i]
         Ts = raob['Tsig'][i]
         Tds = raob['Tdsig'][i]
@@ -69,7 +77,7 @@ def RemNaN_and_Interp(raob):
         Ws = raob['Wspeed'][i]
         Wd = raob['Wdir'][i]
 
-        if len(Pm)>10 and len(Ps)>10:
+        if len(Pm) > 10 and len(Ps) > 10:
             u, v = winds_to_UV(Ws, Wd)
 
             PmTm = zip(Pm, Tm)
@@ -77,7 +85,8 @@ def RemNaN_and_Interp(raob):
             PmTdm = zip(Pm, Tdm)
             PsTds = zip(Ps, Tds)
 
-            PT=[]; PTd = []
+            PT = []
+            PTd = []
             for pmtm in PmTm:
                 PT.append(pmtm)
             for psts in PsTs:
@@ -87,7 +96,6 @@ def RemNaN_and_Interp(raob):
             for pstds in PsTds:
                 PTd.append(pstds)
 
-
             PT = [x for x in PT if all(i == i for i in x)]
             PTd = [x for x in PTd if all(i == i for i in x)]
 
@@ -96,7 +104,7 @@ def RemNaN_and_Interp(raob):
             PTd = sorted(PTd, key=lambda x: x[0])
             PTd = PTd[::-1]
 
-            if len(PT)!=0 and len(PTd)>10:
+            if len(PT) != 0 and len(PTd) > 10:
                 P, T = zip(*PT)
                 Ptd, Td = zip(*PTd)
                 P = np.array(P)
@@ -111,12 +119,12 @@ def RemNaN_and_Interp(raob):
                 f = interp1d(Pm, v, kind='linear', fill_value="extrapolate")
                 V = f(P)
 
-                U = U*1.94384
-                V = V*1.94384
+                U = U * 1.94384
+                V = V * 1.94384
 
                 Pqc, Tqc, Tdqc, Uqc, Vqc = basic_qc(P, T, Td, U, V)
 
-                if len(Pqc)!=0:
+                if len(Pqc) != 0:
                     P_allstns.append(Pqc)
                     T_allstns.append(Tqc)
                     Td_allstns.append(Tdqc)
@@ -124,63 +132,83 @@ def RemNaN_and_Interp(raob):
                     V_allstns.append(Vqc)
                     wmo_ids_allstns.append(raob['wmo_ids'][i])
                     times_allstns.append(raob['times'][i])
-
+        #         else:
+        #             print("drop3:", stn)
+        #     else:
+        #         print("drop2:", stn)
+        # else:
+        #     print("drop1:", stn)
     return P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns
+
+
+class Radiosonde(object):
+    pass
 
 
 def commit_sonde(raob):
     P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
-
-    for i,stn in enumerate(wmo_ids):
-        radiosonde = Radiosonde.objects.filter(wmo_id=stn).first()
-        station = Station.objects.filter(stn_wmoid=stn).first()
-
-        if station:
-            # breakpoint()
-            if radiosonde:
-                radiosonde.sonde_validtime = times[i]
-                radiosonde.temperatureK = T[i]
-                radiosonde.dewpointK = Td[i]
-                radiosonde.pressurehPA = P[i]
-                radiosonde.u_windMS = U[i]
-                radiosonde.v_windMS = V[i]
-                radiosonde.save()
-            else:
-                radiosonde = Radiosonde(sonde_validtime=times[i], wmo_id=stn, station_name=station.stn_name,
-                                        lat=station.stn_lat, lon=station.stn_lon, temperatureK=T[i], dewpointK=Td[i],
-                                        pressurehPA=P[i], u_windMS=U[i], v_windMS=V[i])
-                radiosonde.save()
-        else:
-            print("WMO station {} does not appear to be in the database, skipping.".format(stn))
+    print(len(wmo_ids))
+    # print(nc.variables['wmoStaNum'])
+    print("wmo ids:", wmo_ids, times)
+    for i, stn in enumerate(wmo_ids):
+        print(i, times[i])
+        radiosonde = Radiosonde()
+        radiosonde.sonde_validtime = times[i]
+        radiosonde.temperatureK = T[i]
+        radiosonde.dewpointK = Td[i]
+        radiosonde.pressurehPA = P[i]
+        radiosonde.u_windMS = U[i]
+        radiosonde.v_windMS = V[i]
+        # radiosonde.save()
+        # print(radiosonde)
 
 
-
-def extract_madis_data(ftp, file):
-    print("Reading {}...".format(file))
-    print("\n\n############################\n")
-    flo = BytesIO()
-    ftp.retrbinary('RETR {}'.format(file), flo.write)
-    flo.seek(0)
-    with gzip.open(flo, 'rb') as f:
+def extract_madis_data(file):
+    # print("Reading {}...".format(file))
+    # print("\n\n############################\n")
+    # flo = BytesIO()
+    # ftp.retrbinary('RETR {}'.format(file), flo.write)
+    # flo.seek(0)
+    with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
+
+        relTime = nc.variables['relTime'][:].filled(fill_value=np.nan)
+        sondTyp = nc.variables['sondTyp'][:].filled(fill_value=np.nan)
+        staLat = nc.variables['staLat'][:].filled(fill_value=np.nan)
+        staLon = nc.variables['staLon'][:].filled(fill_value=np.nan)
+        staElev = nc.variables['staElev'][:].filled(fill_value=np.nan)
+
         Tman = nc.variables['tpMan'][:].filled(fill_value=np.nan)
         DPDman = nc.variables['tdMan'][:].filled(fill_value=np.nan)
         wmo_ids = nc.variables['wmoStaNum'][:].filled(fill_value=np.nan)
+
         DPDsig = nc.variables['tdSigT'][:].filled(fill_value=np.nan)
         Tsig = nc.variables['tpSigT'][:].filled(fill_value=np.nan)
         synTimes = nc.variables['synTime'][:].filled(fill_value=np.nan)
+        Psig = nc.variables['prSigT'][:].filled(fill_value=np.nan)
+        Pman = nc.variables['prMan'][:].filled(fill_value=np.nan)
+        #print(len(wmo_ids), wmo_ids, synTimes)
+
+        Wspeed = nc.variables['wsMan'][:].filled(fill_value=np.nan)
+        Wdir = nc.variables['wdMan'][:].filled(fill_value=np.nan)
         raob = {
-            "Tsig": nc.variables['tpSigT'][:].filled(fill_value=np.nan),
+            "relTime" : relTime,
+            "sondTyp" : sondTyp,
+            "staLat": staLat,
+            "staLon": staLon,
+            "staElev": staElev,
+            "Tsig": Tsig,
             "Tdsig": Tsig - DPDsig,
             "Tman": Tman,
-            "Psig": nc.variables['prSigT'][:].filled(fill_value=np.nan),
-            "Pman": nc.variables['prMan'][:].filled(fill_value=np.nan),
+            "Psig": Psig,
+            "Pman": Pman,
             "Tdman": Tman - DPDman,
-            "Wspeed": nc.variables['wsMan'][:].filled(fill_value=np.nan),
-            "Wdir": nc.variables['wdMan'][:].filled(fill_value=np.nan),
+            "Wspeed": Wspeed,
+            "Wdir": Wdir,
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
+        # print(raob)
         commit_sonde(raob)
 
 
@@ -192,25 +220,34 @@ def read_madis():
 
     # Iterate through the files, find what's been modified since the last call and extract the new data
     for file in ftp.nlst():
-        file_timestamp = datetime.strptime(ftp.voidcmd("MDTM {}".format(file))[4:].strip(), '%Y%m%d%H%M%S').replace(microsecond=0).replace(tzinfo=pytz.utc)
-        record = UpdateRecord.objects.filter(filename=file).first()
+        file_timestamp = datetime.strptime(ftp.voidcmd("MDTM {}".format(file))[
+                                           4:].strip(), '%Y%m%d%H%M%S').replace(microsecond=0).replace(tzinfo=pytz.utc)
+        #record = UpdateRecord.objects.filter(filename=file).first()
+        record = None
+        now = datetime.now(tz=timezone.utc)
+
         if record:
-            if (file_timestamp != record.updatetime and (timezone.now() - file_timestamp).total_seconds() < 173000):
-                print("{} will be updated. Old mod time was {}. New mod time is {}".format(file, record.updatetime, file_timestamp))
+            if (file_timestamp != record.updatetime and (now - file_timestamp).total_seconds() < 173000):
+                print("{} will be updated. Old mod time was {}. New mod time is {}".format(
+                    file, record.updatetime, file_timestamp))
                 extract_madis_data(ftp, file)
                 # breakpoint()
                 record.updatetime = file_timestamp
                 record.save()
         else:
-            if (timezone.now() - file_timestamp).total_seconds() < 173000:
+            if (now - file_timestamp).total_seconds() < 173000:
                 print("{} has not been downloaded before. Downloading..".format(file))
                 extract_madis_data(ftp, file)
-                new_record = UpdateRecord(updatetime=file_timestamp, filename=file)
-                print("Contents of {} recorded with timestamp {}".format(file, file_timestamp))
-                new_record.save()
+                #new_record = UpdateRecord(updatetime=file_timestamp, filename=file)
+                print("Contents of {} recorded with timestamp {}".format(
+                    file, file_timestamp))
+                # new_record.save()
 
 
+# def run():
+if __name__ == "__main__":
+    extract_madis_data('20210204_1100.gz')
+    # extract_madis_data('madis/20210131_0600.gz')
 
-def run():
     # UpdateRecord.delete_expired(10)
-    raob = read_madis()
+    #raob = read_madis()

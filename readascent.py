@@ -1,37 +1,37 @@
 
+from pathlib import Path, PurePath
+from thermodynamics import barometric_equation_inv
+from string import punctuation
+from scipy.interpolate import interp1d
+from pprint import pprint
+from operator import itemgetter
+from netCDF4 import Dataset
+from math import cos, pi, isnan
+from math import atan, sin, cos
+from eccodes import *
+from datetime import datetime, timezone, timedelta, date
+import re
+import csv
+import zipfile
+import traceback
+import tempfile
+import sys
+import pytz
+import os
+import orjson
+import numpy as np
+import logging
+import json
+import gzip
+import geojson
+import ciso8601
+import brotli
+import argparse
 import warnings
 warnings.filterwarnings("ignore")
 
-import argparse
-import brotli
-import ciso8601
-import geojson
-import gzip
-import json
-import logging
-import numpy as np
-import orjson
-import os
-from pathlib import Path,PurePath
-import pytz
-import sys
-import tempfile
-import traceback
-import zipfile
-import csv
-import re
 
-from datetime import datetime, timezone, timedelta, date
-from eccodes import *
-from math import atan, sin, cos
-from math import cos, pi, isnan
-from netCDF4 import Dataset
-from operator import itemgetter
-from pprint import pprint
-from scipy.interpolate import interp1d
-from string import punctuation
 # lifted from https://github.com/tjlang/SkewT
-from thermodynamics import barometric_equation_inv
 
 
 earth_avg_radius = 6371008.7714
@@ -265,8 +265,8 @@ def convert_to_geojson(args, h, samples):
     properties = {
         "station_id":  id,
         "id_type":  typ,
-        "source" : "BUFR",
-        "path_type": "reported",
+        "source": "BUFR",
+        "path_source": "origin",
         "syn_timestamp": ts,
         "firstSeen": takeoff.timestamp(),
         "lat": h['latitude'],
@@ -327,17 +327,17 @@ def convert_to_geojson(args, h, samples):
 
     duration = fc.properties['lastSeen'] - fc.properties['firstSeen']
     if duration > MAX_FLIGHT_DURATION:
-        logging.error(f"--- unreasonably long flight: {(duration/3600):.1f} hours")
+        logging.error(
+            f"--- unreasonably long flight: {(duration/3600):.1f} hours")
 
     return fc
 
 
-updated_stations = []
-
 def bufr_qc(args, h, s, fn, zip):
     pass
 
-def gen_output(args, h, s, fn, zip):
+
+def gen_output(args, h, s, fn, zip, updated_stations):
     h['samples'] = s
 
     if len(s) < 10:
@@ -353,7 +353,6 @@ def gen_output(args, h, s, fn, zip):
         h['second'] = 0  # dont care
 
     fc = convert_to_geojson(args, h, s)
-
 
     fc.properties['origin_member'] = fn
     if zip:
@@ -395,7 +394,7 @@ def gen_output(args, h, s, fn, zip):
         pprint(fc)
 
 
-def process_bufr(args, f, fn, zip):
+def process_bufr(args, f, fn, zip, updated_stations):
     try:
         (h, s) = bufr_decode(f, fn, zip, args)
 
@@ -407,32 +406,114 @@ def process_bufr(args, f, fn, zip):
         return False
 
 #    except CodesInternalError  as err:
-    except Exception  as err:
+    except Exception as err:
         traceback.print_exc(file=sys.stderr)
         return False
 
     else:
-        gen_output(args, h, s, fn, zip)
+        gen_output(args, h, s, fn, zip, updated_stations)
         return True
 
-def update_summary(args, updated_stations):
-    if args.summary and os.path.exists(args.summary):
-        with open(args.summary, 'rb') as f:
-            s = f.read().decode()
-            summary = geojson.loads(s)
-            logging.debug(f'read summary from {args.summary}')
-    else:
-        logging.info(f'no summary file')
-        summary = dict()
 
-    if args.stations and os.path.exists(args.stations):
-        with open(args.stations, 'rb') as f:
-            s = f.read().decode()
-            stations = orjson.loads(s)
-            logging.debug(f'read stations from {args.stations}')
+def read_summary(fn):
+    if os.path.exists(fn):
+        with open(fn, 'rb') as f:
+            s = f.read()
+            if fn.endswith('.br'):
+                s = brotli.decompress(s)
+            summary = geojson.loads(s.decode())
+            logging.debug(
+                f"read summary from {fn} (brotli={fn.endswith('.br')})")
     else:
-        logging.info(f'no stations file')
-        stations = dict()
+        logging.debug(f'no summary file yet: {fn}')
+        summary = dict()
+    return summary
+
+
+def is_geojson_summary(s):
+    return 'type' in s and s['type'] == 'FeatureCollection'
+
+
+def update_geojson_summary(args, stations, updated_stations, summary):
+
+    stations_with_ascents = dict()
+    # unroll into dicts for quick access
+    if 'features' in summary:
+        for feature in summary.features:
+            st_id = feature.properties['ascents'][0]['station_id']
+            stations_with_ascents[st_id] = feature
+
+    # now walk the updates
+    for id, asc in updated_stations:
+        if id in stations_with_ascents:
+            #print("-----id in stations_with_ascents", id)
+
+            # we already have ascents from this station.
+            # append, sort by synoptic time and de-duplicate
+            oldlist = stations_with_ascents[id]['properties']['ascents']
+            oldlist.append(asc)
+            newlist = sorted(oldlist, key=itemgetter(
+                'syn_timestamp'), reverse=True)
+            # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
+            seen = set()
+            dedup = []
+            for d in newlist:
+                t = d['syn_timestamp']
+                if t not in seen:
+                    seen.add(t)
+                    dedup.append(d)
+
+            # print("--- dedup=")
+            # pprint(dedup)
+            stations_with_ascents[id]['properties']['ascents'] = dedup
+        else:
+            #print("-----id NOT stations_with_ascents", id)
+
+            # station appears with first-time ascent
+            properties = dict()
+            properties["ascents"] = [asc]
+
+            if id in stations:
+                st = stations[id]
+                coords= (st['lon'], st['lat'], st['elevation'])
+                properties["name"] = st['name']
+            else:
+                # unlisted station
+                # anonymous + mobile stations
+                # take coords and station_id as name from ascent
+                coords= (asc['lon'], asc['lat'], asc['elevation'])
+                properties["name"] = asc['station_id']
+
+            stations_with_ascents[id] = geojson.Feature(geometry=geojson.Point(coords),
+                                                        properties=properties)
+
+
+        # create GeoJSON summary
+        fc = geojson.FeatureCollection([])
+        for st, f in stations_with_ascents.items():
+            fc.features.append(f)
+
+        gj = geojson.dumps(fc, indent=4)
+        dest = os.path.splitext(args.summary)[0] + '.geojson.br'
+        fd, path = tempfile.mkstemp(dir=args.tmpdir)
+        os.write(fd, brotli.compress(gj.encode("utf8")))
+        os.fsync(fd)
+        os.close(fd)
+        os.rename(path, dest)
+        os.chmod(dest, 0o644)
+
+
+def update_summary(args, stations, updated_stations, summary):
+
+    # # summary in geojson format? we're migrating to all-geojson
+    # is_geojson =  'type' in current_summary and current_summary['type'] == 'FeatureCollection'
+    # if is_geojson:
+    #     for feature in current_summary.features:
+    #         name = feature.name
+    #         ascents = feature.ascents
+    #
+    # else:
+    #     summary = current_summary
 
     for id, asc in updated_stations:
         if id in summary:
@@ -487,7 +568,12 @@ def json2geojson(sj):
     fc = geojson.FeatureCollection([])
 
     for id, desc in sj.items():
+        #        try:
         pt = (desc['lon'], desc['lat'], desc['elevation'])
+        # except Exception as e:
+        #     pprint(sj)
+        #     print(desc)
+        #     raise
         deleatur = ['lon', 'lat', 'elevation']
         newdict = {k: v for k, v in desc.items() if not k in deleatur}
 
@@ -639,9 +725,6 @@ def height2time(h0, height):
     return hdiff / ASCENT_RATE
 
 
-mperdeg = 111320.0
-
-
 def latlonPlusDisplacement(lat=0, lon=0, u=0, v=0):
     # HeidiWare
     dLat = v / mperdeg
@@ -649,15 +732,11 @@ def latlonPlusDisplacement(lat=0, lon=0, u=0, v=0):
     return lat + dLat, lon + dLon
 
 
-earth_avg_radius = 6371008.7714
-earth_gravity = 9.80665
-
-
 def height_to_geopotential_height(height):
     return earth_gravity / ((1 / height) + 1 / earth_avg_radius) / earth_gravity
 
 
-def emit_ascents(raob, stations):
+def emit_ascents(raob, stations, updated_stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
         raob)
     # print(staElev)
@@ -688,7 +767,7 @@ def emit_ascents(raob, stations):
             "id_type":  "wmo",
             "source":  "netCDF",
             "sonde_type": int(sondTyp[i]),
-            "path_type": "simulated",
+            "path_source": "simulated",
             "syn_timestamp": syntime.timestamp(),
             "firstSeen": float(relTime[i]),
             "lat": float(staLat[i]),
@@ -744,11 +823,11 @@ def emit_ascents(raob, stations):
         fc.properties['lastSeen'] = sampleTime.timestamp()
         # print(fc)
         #print(geojson.dumps(fc, indent=4, ignore_nan=True))
-        #print("yeeahw")
-        #sys.exit(0)
+        # print("yeeahw")
+        # sys.exit(0)
 
 
-def process_netcdf(file, stationdict):
+def process_netcdf(file, stationdict, updated_stations):
 
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
@@ -789,7 +868,8 @@ def process_netcdf(file, stationdict):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        emit_ascents(raob, stationdict)
+        emit_ascents(raob, stationdict, updated_stations)
+
 
 def newer(filename, ext):
     """
@@ -807,7 +887,7 @@ def newer(filename, ext):
 
 def initialize_stations(txt_fn, json_fn):
     US_STATES = ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID",
-                 "IL", "IN", "KS","LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC",
+                 "IL", "IN", "KS", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC",
                  "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD",
                  "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY"]
 
@@ -816,12 +896,13 @@ def initialize_stations(txt_fn, json_fn):
     with open(txt_fn, 'r') as csvfile:
         stndata = csv.reader(csvfile, delimiter='\t')
         for row in stndata:
-            m = re.match(r"(?P<stn_wmoid>^\w+)\s+(?P<stn_lat>\S+)\s+(?P<stn_lon>\S+)\s+(?P<stn_altitude>\S+)(?P<stn_name>\D+)" , row[0])
+            m = re.match(
+                r"(?P<stn_wmoid>^\w+)\s+(?P<stn_lat>\S+)\s+(?P<stn_lon>\S+)\s+(?P<stn_altitude>\S+)(?P<stn_name>\D+)", row[0])
             fields = m.groupdict()
             stn_wmoid = fields['stn_wmoid'][6:]
             stn_name = fields['stn_name'].strip()
 
-            if re.match(r"^[a-zA-Z]{2}\s", stn_name) and  stn_name[:2] in US_STATES:
+            if re.match(r"^[a-zA-Z]{2}\s", stn_name) and stn_name[:2] in US_STATES:
                 stn_name = stn_name[2:].strip().title() + ", " + stn_name[:2]
             else:
                 stn_name = stn_name.title()
@@ -834,7 +915,7 @@ def initialize_stations(txt_fn, json_fn):
                 stationdict[stn_wmoid] = {
                     "name":  stn_name,
                     "lat": stn_lat,
-                    "lon" : stn_lon,
+                    "lon": stn_lon,
                     "elevation": stn_altitude
                 }
 
@@ -842,9 +923,11 @@ def initialize_stations(txt_fn, json_fn):
             j = json.dumps(stationdict, indent=4).encode("utf8")
             jfile.write(j)
 
+
 class BufrUnreadableError(Exception):
-     pass
+    pass
 #
+
 
 def update_station_list(txt_fn):
     """
@@ -893,10 +976,14 @@ def main():
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--brotli', action='store_true', default=False)
-    parser.add_argument('--summary', action='store', default=None)
-    parser.add_argument('-n','--ignore-timestamps', action='store_true',
+    parser.add_argument('--summary',
+                        action='store',
+                        required=True)
+    parser.add_argument('-n', '--ignore-timestamps', action='store_true',
                         help="ignore, and do not create timestamps")
-    parser.add_argument('--stations', action='store', required=True, help="path to station_list.txt file")
+    parser.add_argument('--stations', action='store',
+                        required=True,
+                        help="path to station_list.txt file")
     parser.add_argument('--tmpdir', action='store', default="/tmp")
     parser.add_argument('files', nargs='*')
 
@@ -915,6 +1002,11 @@ def main():
     os.umask(0o22)
 
     station_fn, station_dict = update_station_list(args.stations)
+    updated_stations = []
+    summary = read_summary(args.summary)
+    if not summary:
+        # try brotlified version
+        summary = read_summary(args.summary + ".br")
 
     for f in args.files:
 
@@ -926,47 +1018,57 @@ def main():
         logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
         if ext == '.zip':  # a zip archive of BUFR files
-            zf = zipfile.ZipFile(f)
-            for info in zf.infolist():
-                try:
-                    logging.debug(f"reading: {f} member {info.filename}")
-                    data = zf.read(info.filename)
-                    fd, path = tempfile.mkstemp(dir=args.tmpdir)
-                    os.write(fd, data)
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    file = os.fdopen(fd)
-                except KeyError:
-                    log.error(f'ERROR: zip file {f}: no such member {info.filename}')
-                    continue
-                else:
-                    logging.debug(f"processing BUFR: {f} member {info.filename}")
-                    success = process_bufr(args, file, info.filename, f)
-                    file.close()
-                    os.remove(path)
-                    if success and not args.ignore_timestamps:
-                        Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
+            with zipfile.ZipFile(f) as zf:
+                for info in zf.infolist():
+                    try:
+                        logging.debug(f"reading: {f} member {info.filename}")
+                        data = zf.read(info.filename)
+                        fd, path = tempfile.mkstemp(dir=args.tmpdir)
+                        os.write(fd, data)
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        file = os.fdopen(fd)
+                    except KeyError:
+                        log.error(
+                            f'ERROR: zip file {f}: no such member {info.filename}')
+                        continue
+                    else:
+                        logging.debug(
+                            f"processing BUFR: {f} member {info.filename}")
+                        success = process_bufr(
+                            args, file, info.filename, f, updated_stations)
+                        file.close()
+                        os.remove(path)
+                        if success and not args.ignore_timestamps:
+                            Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
 
-                    # move to failed
+                        # move to failed
 
         elif ext == '.bin':   # a singlle BUFR file
             file = open(f, 'rb')
             logging.debug(f"processing BUFR: {f}")
 
-            success = process_bufr(args, file, f, None)
+            success = process_bufr(args, file, f, None, updated_stations)
             file.close()
-            if success  and not args.ignore_timestamps:
+            if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed
 
         elif ext == '.gz':  # a gzipped netCDF file
             logging.debug(f"processing netCDF: {f}")
-            success = process_netcdf(f, station_dict)
-            if success  and not args.ignore_timestamps:
+            success = process_netcdf(f, station_dict, updated_stations)
+            if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed? do not think so
 
-    if args.summary:
-        update_summary(args, updated_stations)
+    # Migrate to all-Geojson
+    if is_geojson_summary(summary) or not summary:  # or none yet
+        logging.debug(f"creating GeoJSON summary: {args.summary}")
+
+        update_geojson_summary(args, station_dict, updated_stations, summary)
+    else:
+        logging.debug(f"creating JSON summary: {summary}")
+
+        update_summary(args, station_dict, updated_stations, summary)
 
 
 if __name__ == "__main__":

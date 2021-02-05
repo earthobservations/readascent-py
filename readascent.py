@@ -265,6 +265,7 @@ def convert_to_geojson(args, h, samples):
     properties = {
         "station_id":  id,
         "id_type":  typ,
+        "source" : "BUFR",
         "path_type": "reported",
         "syn_timestamp": ts,
         "firstSeen": takeoff.timestamp(),
@@ -333,10 +334,11 @@ def convert_to_geojson(args, h, samples):
 
 updated_stations = []
 
+def bufr_qc(args, h, s, fn, zip):
+    pass
+
 def gen_output(args, h, s, fn, zip):
     h['samples'] = s
-    if args.orig:
-        print(h)
 
     if len(s) < 10:
         logging.info(f'QC: skipping {fn} from {zip} - only {len(s)} samples')
@@ -351,6 +353,8 @@ def gen_output(args, h, s, fn, zip):
         h['second'] = 0  # dont care
 
     fc = convert_to_geojson(args, h, s)
+
+
     fc.properties['origin_member'] = fn
     if zip:
         fc.properties['origin_archive'] = PurePath(zip).name
@@ -674,7 +678,8 @@ def commit_sonde(raob, stations):
         syntime = times[i]
         properties = {
             "station_id":  stn,
-            "id_type":  "madis",
+            "id_type":  "wmo",
+            "source":  "netCDF",
             "sonde_type": int(sondTyp[i]),
             "path_type": "simulated",
             "syn_timestamp": syntime.timestamp(),
@@ -736,7 +741,7 @@ def commit_sonde(raob, stations):
         #sys.exit(0)
 
 
-def extract_madis_data(file, stationdict):
+def process_netcdf(file, stationdict):
 
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
@@ -781,7 +786,7 @@ def extract_madis_data(file, stationdict):
         commit_sonde(raob, stationdict)
 
 
-#     extract_madis_data('20210204_1100.gz', 'station_list.json')
+#     process_netcdf('20210204_1100.gz', 'station_list.json')
 
 def newer(filename, ext):
     """
@@ -836,13 +841,11 @@ def initialize_stations(filename):
             jfile.write(j)
 
 def main():
-    parser = argparse.ArgumentParser(description='decode radiosonde BUFR report',
+    parser = argparse.ArgumentParser(description='decode radiosonde BUFR and netCDF reports',
                                      add_help=True)
     parser.add_argument('-v', '--verbose', action='store_true', default=False)
-    parser.add_argument('--orig', action='store_true', default=False)
-    parser.add_argument('--hstep', action='store', type=int, default=0)
-    parser.add_argument('--winds-dir-speed',
-                        action='store_true', default=False)
+    parser.add_argument('--hstep', action='store', type=int, default=100,
+                        help="generate output only if samples vary vertically more than hstep")
     parser.add_argument('--destdir', action='store', default=".")
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
@@ -882,8 +885,6 @@ def main():
         stations = orjson.loads(s)
         logging.debug(f'read stations from {jstations}')
 
-    #sys.exit(0)
-
     for f in args.files:
         (fn, ext) = os.path.splitext(os.path.basename(f))
 
@@ -893,7 +894,7 @@ def main():
 
         logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
-        if ext == '.zip':  # a BUFR archive
+        if ext == '.zip':  # a zip archive of BUFR files
             zf = zipfile.ZipFile(f)
             for info in zf.infolist():
                 try:
@@ -914,14 +915,14 @@ def main():
                     os.remove(path)
                     if not args.ignore_timestamps:
                         Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
-        elif ext == '.bin':   # a BUFR file
+        elif ext == '.bin':   # a singlle BUFR file
             file = open(f, 'rb')
             process_bufr(args, file, f, None)
             file.close()
             if not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
         elif ext == '.gz':  # a gzipped netCDF file
-            extract_madis_data(f, stations)
+            process_netcdf(f, stations)
             if not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
 

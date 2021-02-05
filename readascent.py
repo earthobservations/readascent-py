@@ -27,6 +27,7 @@ import geojson
 import ciso8601
 import brotli
 import argparse
+import time
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -43,10 +44,9 @@ ASCENT_RATE = 5  # m/s = 300m/min
 
 MAX_FLIGHT_DURATION = 3600 * 5  # rather unlikely
 FAKE_TIME_STEPS = 30  # assume 30sec update interval
+BROTLI_SUMMARY_QUALITY = 11 #7
 
 # metpy is terminally slow, so roll our own sans dimension checking
-
-
 def geopotential_height_to_height(gph):
     geopotential = gph * earth_gravity
     return (geopotential * earth_avg_radius) / (earth_gravity * earth_avg_radius - geopotential)
@@ -73,6 +73,9 @@ class MissingKeyError(Exception):
 
     def __str__(self):
         return f'{self.key} -> {self.message}'
+
+class BufrUnreadableError(Exception):
+    pass
 
 
 def bufr_decode(f, fn, archive, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
@@ -446,7 +449,6 @@ def update_geojson_summary(args, stations, updated_stations, summary):
     # now walk the updates
     for id, asc in updated_stations:
         if id in stations_with_ascents:
-            #print("-----id in stations_with_ascents", id)
 
             # we already have ascents from this station.
             # append, sort by synoptic time and de-duplicate
@@ -462,13 +464,8 @@ def update_geojson_summary(args, stations, updated_stations, summary):
                 if t not in seen:
                     seen.add(t)
                     dedup.append(d)
-
-            # print("--- dedup=")
-            # pprint(dedup)
             stations_with_ascents[id]['properties']['ascents'] = dedup
         else:
-            #print("-----id NOT stations_with_ascents", id)
-
             # station appears with first-time ascent
             properties = dict()
             properties["ascents"] = [asc]
@@ -478,8 +475,7 @@ def update_geojson_summary(args, stations, updated_stations, summary):
                 coords= (st['lon'], st['lat'], st['elevation'])
                 properties["name"] = st['name']
             else:
-                # unlisted station
-                # anonymous + mobile stations
+                # unlisted station: anonymous + mobile
                 # take coords and station_id as name from ascent
                 coords= (asc['lon'], asc['lat'], asc['elevation'])
                 properties["name"] = asc['station_id']
@@ -488,99 +484,31 @@ def update_geojson_summary(args, stations, updated_stations, summary):
                                                         properties=properties)
 
 
-        # create GeoJSON summary
-        fc = geojson.FeatureCollection([])
-        for st, f in stations_with_ascents.items():
-            fc.features.append(f)
-
-        gj = geojson.dumps(fc, indent=4)
-        dest = os.path.splitext(args.summary)[0] + '.geojson.br'
-        fd, path = tempfile.mkstemp(dir=args.tmpdir)
-        os.write(fd, brotli.compress(gj.encode("utf8")))
-        os.fsync(fd)
-        os.close(fd)
-        os.rename(path, dest)
-        os.chmod(dest, 0o644)
-
-
-def update_summary(args, stations, updated_stations, summary):
-
-    # # summary in geojson format? we're migrating to all-geojson
-    # is_geojson =  'type' in current_summary and current_summary['type'] == 'FeatureCollection'
-    # if is_geojson:
-    #     for feature in current_summary.features:
-    #         name = feature.name
-    #         ascents = feature.ascents
-    #
-    # else:
-    #     summary = current_summary
-
-    for id, asc in updated_stations:
-        if id in summary:
-            # append, sort and de-duplicate
-            oldlist = summary[id]['ascents']
-            oldlist.append(asc)
-            newlist = sorted(oldlist, key=itemgetter(
-                'syn_timestamp'), reverse=True)
-            # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
-            seen = set()
-            dedup = []
-            for d in newlist:
-                t = d['syn_timestamp']
-                if t not in seen:
-                    seen.add(t)
-                    dedup.append(d)
-            summary[id]['ascents'] = dedup
-        else:
-            if id in stations:
-                st = stations[id]
-            else:
-                # anonymous + mobile stations
-                st = {
-                    "name": asc['station_id'],
-                    "lat": asc['lat'],
-                    "lon": asc['lon'],
-                    "elevation": asc['elevation']
-                }
-            st['ascents'] = [asc]
-            summary[id] = st
-
-        js = orjson.dumps(summary, option=orjson.OPT_INDENT_2)
-        fd, path = tempfile.mkstemp(dir=args.tmpdir)
-        os.write(fd, js)
-        os.fsync(fd)
-        os.close(fd)
-        os.rename(path, args.summary)
-        os.chmod(args.summary, 0o644)
-
-        # create GeoJSON version of summary
-        gj = json2geojson(summary)
-        dest = os.path.splitext(args.summary)[0] + '.geojson'
-        fd, path = tempfile.mkstemp(dir=args.tmpdir)
-        os.write(fd, gj.encode("utf8"))
-        os.fsync(fd)
-        os.close(fd)
-        os.rename(path, dest)
-        os.chmod(dest, 0o644)
-
-
-def json2geojson(sj):
+    # create GeoJSON summary
     fc = geojson.FeatureCollection([])
-
-    for id, desc in sj.items():
-        #        try:
-        pt = (desc['lon'], desc['lat'], desc['elevation'])
-        # except Exception as e:
-        #     pprint(sj)
-        #     print(desc)
-        #     raise
-        deleatur = ['lon', 'lat', 'elevation']
-        newdict = {k: v for k, v in desc.items() if not k in deleatur}
-
-        f = geojson.Feature(geometry=geojson.Point(pt),
-                            properties=newdict)
+    for st, f in stations_with_ascents.items():
         fc.features.append(f)
-    return geojson.dumps(fc, indent=4)
+
+    gj = geojson.dumps(fc, indent=4)
+    dest = os.path.splitext(args.summary)[0]
+    if not dest.endswith(".br"):
+        dest += '.br'
+    fd, path = tempfile.mkstemp(dir=args.tmpdir)
+    src = gj.encode("utf8")
+    start = time.time()
+    dst = brotli.compress(src, quality=BROTLI_SUMMARY_QUALITY)
+    end = time.time()
+    dt = end-start
+    sl = len(src)
+    dl = len(dst)
+    ratio = (1. - dl/sl)*100.
+    logging.debug(f"summary {dest}: brotli {sl} -> {dl}, compression={ratio:.1f}% in {dt:.3f}s")
+    os.write(fd, dst)
+    os.write(fd, brotli.compress(gj.encode("utf8"), quality=BROTLI_SUMMARY_QUALITY))
+    os.fsync(fd)
+    os.close(fd)
+    os.rename(path, dest)
+    os.chmod(dest, 0o644)
 
 
 def winds_to_UV(windSpeeds, windDirection):
@@ -822,7 +750,7 @@ def emit_ascents(raob, stations, updated_stations):
             fc.features.append(f)
         fc.properties['lastSeen'] = sampleTime.timestamp()
         # print(fc)
-        #print(geojson.dumps(fc, indent=4, ignore_nan=True))
+        print(geojson.dumps(fc, indent=4, ignore_nan=True))
         # print("yeeahw")
         # sys.exit(0)
 
@@ -923,10 +851,6 @@ def initialize_stations(txt_fn, json_fn):
             j = json.dumps(stationdict, indent=4).encode("utf8")
             jfile.write(j)
 
-
-class BufrUnreadableError(Exception):
-    pass
-#
 
 
 def update_station_list(txt_fn):
@@ -1061,14 +985,9 @@ def main():
             # move to failed? do not think so
 
     # Migrate to all-Geojson
-    if is_geojson_summary(summary) or not summary:  # or none yet
-        logging.debug(f"creating GeoJSON summary: {args.summary}")
+    logging.debug(f"creating GeoJSON summary: {args.summary}")
+    update_geojson_summary(args, station_dict, updated_stations, summary)
 
-        update_geojson_summary(args, station_dict, updated_stations, summary)
-    else:
-        logging.debug(f"creating JSON summary: {summary}")
-
-        update_summary(args, station_dict, updated_stations, summary)
 
 
 if __name__ == "__main__":

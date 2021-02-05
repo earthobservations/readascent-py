@@ -1,6 +1,6 @@
 
-#import warnings
-# warnings.filterwarnings("ignore")
+import warnings
+warnings.filterwarnings("ignore")
 
 import argparse
 import brotli
@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import orjson
 import os
-import pathlib
+from pathlib import Path,PurePath
 import pytz
 import sys
 import tempfile
@@ -353,7 +353,7 @@ def gen_output(args, h, s, fn, zip):
     fc = convert_to_geojson(args, h, s)
     fc.properties['origin_member'] = fn
     if zip:
-        fc.properties['origin_archive'] = pathlib.PurePath(zip).name
+        fc.properties['origin_archive'] = PurePath(zip).name
     station_id = fc.properties['station_id']
     logging.debug(
         f'output samples retained: {len(fc.features)}, station id={station_id}')
@@ -374,8 +374,8 @@ def gen_output(args, h, s, fn, zip):
     dest = f'{args.destdir}/{cc}/{station_id}_{day}_{time}.geojson{cext}'
     ref = f'{cc}/{station_id}_{day}_{time}.geojson'
 
-    path = pathlib.Path(dest).parent.absolute()
-    pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+    path = Path(dest).parent.absolute()
+    Path(path).mkdir(parents=True, exist_ok=True)
 
     gj = geojson.dumps(fc).encode("utf8")
     if args.geojson:
@@ -724,7 +724,7 @@ def commit_sonde(raob, stations):
                     lat=lat_t, lon=lon_t, u=du, v=dv)
                 prevSecsIntoFlight = secsIntoFlight
 
-            print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
+            #print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
 
             f = geojson.Feature(geometry=geojson.Point((float(lat_t), float(lon_t), height)),
                                 properties=properties)
@@ -732,7 +732,7 @@ def commit_sonde(raob, stations):
         fc.properties['lastSeen'] = sampleTime.timestamp()
         # print(fc)
         #print(geojson.dumps(fc, indent=4, ignore_nan=True))
-        print("yeeahw")
+        #print("yeeahw")
         #sys.exit(0)
 
 
@@ -848,6 +848,8 @@ def main():
     parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--brotli', action='store_true', default=False)
     parser.add_argument('--summary', action='store', default=None)
+    parser.add_argument('-n','--ignore-timestamps', action='store_true',
+                        help="ignore, and do not create timestamps")
     parser.add_argument('--stations', action='store', required=True, help="path to station_list.txt file")
     parser.add_argument('--tmpdir', action='store', default="/tmp")
     parser.add_argument('files', nargs='*')
@@ -867,7 +869,7 @@ def main():
     os.umask(0o22)
 
     # read the station_list.json file
-    # create or update if needed from station_list.txt (same dir)
+    # create or update on the fly if needed from station_list.txt (same dir assumed)
     (fn, ext) = os.path.splitext(os.path.basename(args.stations))
     jstations = fn + ".json"
     if newer(args.stations, ".json"):
@@ -884,7 +886,12 @@ def main():
 
     for f in args.files:
         (fn, ext) = os.path.splitext(os.path.basename(f))
-        #logging.debug(f"processing: {f} fn={fn} ext={ext}")
+
+        if not args.ignore_timestamps and not newer(f, ".timestamp"):
+            logging.debug(f"skipping: {f}  (timestamp)")
+            continue
+
+        logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
         if ext == '.zip':  # a BUFR archive
             zf = zipfile.ZipFile(f)
@@ -898,20 +905,25 @@ def main():
                     file = os.fdopen(fd)
                 except KeyError:
                     log.error(
-                        f'ERROR: Did not find {info.filename} in zipe file {f}')
+                        f'ERROR: Did not find {info.filename} in zip file {f}')
                 else:
                     #logging.debug(f"processing: {info.filename} from {f}")
                     (bn, ext) = os.path.splitext(info.filename)
                     process_bufr(args, file, info.filename, f)
                     file.close()
                     os.remove(path)
+                    if not args.ignore_timestamps:
+                        Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
         elif ext == '.bin':   # a BUFR file
             file = open(f, 'rb')
             process_bufr(args, file, f, None)
             file.close()
+            if not args.ignore_timestamps:
+                Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
         elif ext == '.gz':  # a gzipped netCDF file
             extract_madis_data(f, stations)
-
+            if not args.ignore_timestamps:
+                Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
 
     if args.summary:
         update_summary(args, updated_stations)

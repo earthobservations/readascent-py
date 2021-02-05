@@ -29,9 +29,9 @@ import brotli
 import argparse
 import time
 import warnings
-warnings.filterwarnings("ignore")
+#warnings.filterwarnings("ignore")
 
-
+np.seterr(all='raise')
 # lifted from https://github.com/tjlang/SkewT
 
 
@@ -337,32 +337,27 @@ def convert_to_geojson(args, h, samples):
 
 
 def bufr_qc(args, h, s, fn, zip):
-    pass
-
-
-def gen_output(args, h, s, fn, zip, updated_stations):
-    h['samples'] = s
-
     if len(s) < 10:
         logging.info(f'QC: skipping {fn} from {zip} - only {len(s)} samples')
-        return
+        return False
 
     # QC here!
     if not ({'year', 'month', 'day', 'minute', 'hour'} <= h.keys()):
         logging.info(f'QC: skipping {fn} from {zip} - day/time missing')
-        return
+        return False
 
     if not 'second' in h:
         h['second'] = 0  # dont care
 
-    fc = convert_to_geojson(args, h, s)
+    return True
 
-    fc.properties['origin_member'] = fn
+
+def write_geojson(args, fc, fn, zip, updated_stations):
+    fc.properties['origin_member'] = PurePath(fn).name
     if zip:
         fc.properties['origin_archive'] = PurePath(zip).name
     station_id = fc.properties['station_id']
-    logging.debug(
-        f'output samples retained: {len(fc.features)}, station id={station_id}')
+    logging.debug(f'output samples retained: {len(fc.features)}, station id={station_id}')
 
     updated_stations.append((station_id, fc.properties))
 
@@ -383,7 +378,17 @@ def gen_output(args, h, s, fn, zip, updated_stations):
     path = Path(dest).parent.absolute()
     Path(path).mkdir(parents=True, exist_ok=True)
 
-    gj = geojson.dumps(fc).encode("utf8")
+    if not fc.is_valid:
+                    #print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
+
+        logging.error(f'--- invalid GeoJSON! {fc.errors()}')
+    try:
+        gj = geojson.dumps(fc, allow_nan=False).encode("utf8")
+    except ValueError as e:
+        print("ref", ref)
+        print(fc)
+        raise
+
     if args.geojson:
         logging.debug(f'writing {dest}')
         with open(dest, 'wb') as gjfile:
@@ -392,9 +397,19 @@ def gen_output(args, h, s, fn, zip, updated_stations):
                 cmp = brotli.compress(gj)
             gjfile.write(cmp)
 
-    fc.properties['path'] = ref
+    fc.properties['path'] = ref # ?????
+
+
     if args.dump_geojson:
         pprint(fc)
+
+
+
+def gen_output(args, h, s, fn, zip, updated_stations):
+    h['samples'] = s
+
+    fc = convert_to_geojson(args, h, s)
+    write_geojson(args, fc, fn, zip, updated_stations)
 
 
 def process_bufr(args, f, fn, zip, updated_stations):
@@ -414,8 +429,9 @@ def process_bufr(args, f, fn, zip, updated_stations):
         return False
 
     else:
-        gen_output(args, h, s, fn, zip, updated_stations)
-        return True
+        if bufr_qc(args, h, s, fn, zip):
+            return gen_output(args, h, s, fn, zip, updated_stations)
+        return False
 
 
 def read_summary(fn):
@@ -431,10 +447,6 @@ def read_summary(fn):
         logging.debug(f'no summary file yet: {fn}')
         summary = dict()
     return summary
-
-
-def is_geojson_summary(s):
-    return 'type' in s and s['type'] == 'FeatureCollection'
 
 
 def update_geojson_summary(args, stations, updated_stations, summary):
@@ -483,16 +495,21 @@ def update_geojson_summary(args, stations, updated_stations, summary):
             stations_with_ascents[id] = geojson.Feature(geometry=geojson.Point(coords),
                                                         properties=properties)
 
-
     # create GeoJSON summary
+    ns = na = 0
     fc = geojson.FeatureCollection([])
     for st, f in stations_with_ascents.items():
+        ns += 1
+        na += len(f.properties['ascents'])
         fc.features.append(f)
 
     gj = geojson.dumps(fc, indent=4)
     dest = os.path.splitext(args.summary)[0]
     if not dest.endswith(".br"):
         dest += '.br'
+
+    logging.debug(f"summary {dest}: {ns} active stations, {na} ascents")
+
     fd, path = tempfile.mkstemp(dir=args.tmpdir)
     src = gj.encode("utf8")
     start = time.time()
@@ -504,7 +521,6 @@ def update_geojson_summary(args, stations, updated_stations, summary):
     ratio = (1. - dl/sl)*100.
     logging.debug(f"summary {dest}: brotli {sl} -> {dl}, compression={ratio:.1f}% in {dt:.3f}s")
     os.write(fd, dst)
-    os.write(fd, brotli.compress(gj.encode("utf8"), quality=BROTLI_SUMMARY_QUALITY))
     os.fsync(fd)
     os.close(fd)
     os.rename(path, dest)
@@ -557,7 +573,7 @@ def basic_qc(Ps, T, Td, U, V):
     return Ps, T, Td, U, V
 
 
-def RemNaN_and_Interp(raob):
+def RemNaN_and_Interp(raob, file):
     P_allstns = []
     T_allstns = []
     Td_allstns = []
@@ -616,12 +632,29 @@ def RemNaN_and_Interp(raob):
                 T = np.array(T)
                 Td = np.array(Td)
 
-                f = interp1d(Ptd, Td, kind='linear', fill_value="extrapolate")
-                Td = f(P)
-                f = interp1d(Pm, u, kind='linear', fill_value="extrapolate")
-                U = f(P)
-                f = interp1d(Pm, v, kind='linear', fill_value="extrapolate")
-                V = f(P)
+                try:
+                    f = interp1d(Ptd, Td, kind='linear', fill_value="extrapolate")
+                    Td = f(P)
+                except FloatingPointError as e:
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
+                    #logging.info(f"Ptd={Ptd} Td={Td} P={P}")
+                    continue
+
+                try:
+                    f = interp1d(Pm, u, kind='linear', fill_value="extrapolate")
+                    U = f(P)
+                except FloatingPointError as e:
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
+                    #logging.info(f"Pm={Pm} u={u} P={P}")
+                    continue
+
+                try:
+                    f = interp1d(Pm, v, kind='linear', fill_value="extrapolate")
+                    V = f(P)
+                except FloatingPointError as e:
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
+                    #logging.info(f"Pm={Pm} v={v} P={P}")
+                    continue
 
                 U = U * 1.94384
                 V = V * 1.94384
@@ -664,9 +697,9 @@ def height_to_geopotential_height(height):
     return earth_gravity / ((1 / height) + 1 / earth_avg_radius) / earth_gravity
 
 
-def emit_ascents(raob, stations, updated_stations):
+def emit_ascents(args, file, archive, raob, stations, updated_stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
-        raob)
+        raob, file)
     # print(staElev)
     for i, stn in enumerate(wmo_ids):
 
@@ -747,15 +780,16 @@ def emit_ascents(raob, stations, updated_stations):
 
             f = geojson.Feature(geometry=geojson.Point((float(lat_t), float(lon_t), height)),
                                 properties=properties)
+
+            if not f.is_valid:
+                    logging.error(f'--- invalid GeoJSON! {f.errors()}')
+
             fc.features.append(f)
         fc.properties['lastSeen'] = sampleTime.timestamp()
-        # print(fc)
-        print(geojson.dumps(fc, indent=4, ignore_nan=True))
-        # print("yeeahw")
-        # sys.exit(0)
+        write_geojson(args, fc, file, archive, updated_stations)
+        return True
 
-
-def process_netcdf(file, stationdict, updated_stations):
+def process_netcdf(args, file, archive, stationdict, updated_stations):
 
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
@@ -796,7 +830,7 @@ def process_netcdf(file, stationdict, updated_stations):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        emit_ascents(raob, stationdict, updated_stations)
+        return emit_ascents(args, file, archive, raob, stationdict, updated_stations)
 
 
 def newer(filename, ext):
@@ -979,14 +1013,15 @@ def main():
 
         elif ext == '.gz':  # a gzipped netCDF file
             logging.debug(f"processing netCDF: {f}")
-            success = process_netcdf(f, station_dict, updated_stations)
+            success = process_netcdf(args, f, None, station_dict, updated_stations)
             if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed? do not think so
 
     # Migrate to all-Geojson
-    logging.debug(f"creating GeoJSON summary: {args.summary}")
-    update_geojson_summary(args, station_dict, updated_stations, summary)
+    if updated_stations:
+        logging.debug(f"creating GeoJSON summary: {args.summary}")
+        update_geojson_summary(args, station_dict, updated_stations, summary)
 
 
 

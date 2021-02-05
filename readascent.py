@@ -75,11 +75,11 @@ class MissingKeyError(Exception):
         return f'{self.key} -> {self.message}'
 
 
-def bufr_decode(f, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
+def bufr_decode(f, fn, archive, args, fakeTimes=True, fakeDisplacement=True, logFixup=True):
 
     ibufr = codes_bufr_new_from_file(f)
     if not ibufr:
-        raise Exception("empty file")
+        raise BufrUnreadableError("empty file", fn, archive)
     codes_set(ibufr, 'unpack', 1)
 
     missingHdrKeys = 0
@@ -397,16 +397,23 @@ def gen_output(args, h, s, fn, zip):
 
 def process_bufr(args, f, fn, zip):
     try:
-        (h, s) = bufr_decode(f, args)
+        (h, s) = bufr_decode(f, fn, zip, args)
 
-    except Exception as e:
-        logging.info(f"exception processing {fn} from {zip}: {e}")
+    # except Exception as e:
+    #     logging.info(f"exception processing {fn} from {zip}: {e}")
+    #
+    except BufrUnreadableError as e:
+        logging.warning(f"e={e}")
+        return False
 
-    except CodesInternalError as err:
+#    except CodesInternalError  as err:
+    except Exception  as err:
         traceback.print_exc(file=sys.stderr)
+        return False
+
     else:
         gen_output(args, h, s, fn, zip)
-
+        return True
 
 def update_summary(args, updated_stations):
     if args.summary and os.path.exists(args.summary):
@@ -650,7 +657,7 @@ def height_to_geopotential_height(height):
     return earth_gravity / ((1 / height) + 1 / earth_avg_radius) / earth_gravity
 
 
-def commit_sonde(raob, stations):
+def emit_ascents(raob, stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
         raob)
     # print(staElev)
@@ -761,7 +768,6 @@ def process_netcdf(file, stationdict):
         synTimes = nc.variables['synTime'][:].filled(fill_value=np.nan)
         Psig = nc.variables['prSigT'][:].filled(fill_value=np.nan)
         Pman = nc.variables['prMan'][:].filled(fill_value=np.nan)
-        #print(len(wmo_ids), wmo_ids, synTimes)
 
         Wspeed = nc.variables['wsMan'][:].filled(fill_value=np.nan)
         Wdir = nc.variables['wdMan'][:].filled(fill_value=np.nan)
@@ -783,10 +789,7 @@ def process_netcdf(file, stationdict):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        commit_sonde(raob, stationdict)
-
-
-#     process_netcdf('20210204_1100.gz', 'station_list.json')
+        emit_ascents(raob, stationdict)
 
 def newer(filename, ext):
     """
@@ -795,14 +798,14 @@ def newer(filename, ext):
             foo.json does not exist or
             foo.json has an older modification time than foo.ext
     """
-    (fn, e) = os.path.splitext(os.path.basename(filename))
+    (fn, e) = os.path.splitext(filename)
     target = fn + ext
     if not os.path.exists(target):
         return True
     return os.path.getmtime(filename) > os.path.getmtime(target)
 
 
-def initialize_stations(filename):
+def initialize_stations(txt_fn, json_fn):
     US_STATES = ["AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA", "ID",
                  "IL", "IN", "KS","LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT", "NC",
                  "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA", "RI", "SC", "SD",
@@ -810,7 +813,7 @@ def initialize_stations(filename):
 
     stations = geojson.FeatureCollection([])
     stationdict = dict()
-    with open(filename, 'r') as csvfile:
+    with open(txt_fn, 'r') as csvfile:
         stndata = csv.reader(csvfile, delimiter='\t')
         for row in stndata:
             m = re.match(r"(?P<stn_wmoid>^\w+)\s+(?P<stn_lat>\S+)\s+(?P<stn_lon>\S+)\s+(?P<stn_altitude>\S+)(?P<stn_name>\D+)" , row[0])
@@ -835,10 +838,50 @@ def initialize_stations(filename):
                     "elevation": stn_altitude
                 }
 
-        (fn, ext) = os.path.splitext(os.path.basename(filename))
-        with open(f'{fn}.json', 'wb') as jfile:
+        with open(json_fn, 'wb') as jfile:
             j = json.dumps(stationdict, indent=4).encode("utf8")
             jfile.write(j)
+
+class BufrUnreadableError(Exception):
+     pass
+#
+
+def update_station_list(txt_fn):
+    """
+    fn is expected to look like <path>/station_list.txt
+    if a corresponding <path>/station_list.json file exists and is newer:
+        read that
+
+    if the corresponding <path>/station_list.json is older or does not exist:
+        read and parse the .txt file
+        generate the station_list.json
+        read that
+
+    return the station fn and dict
+    """
+    (base, ext) = os.path.splitext(txt_fn)
+    if ext != ".txt":
+        raise ValueError("expecting .txt extension:", txt_fn)
+
+    json_fn = base + ".json"
+
+    #logging.debug(f'base {base} from {txt_fn}, json_fn {json_fn}')
+
+    # read the station_list.json file
+    # create or update on the fly if needed from station_list.txt (same dir assumed)
+    if newer(txt_fn, ".json"):
+        # rebuild the json file
+        logging.debug(f'rebuildin {json_fn} from {txt_fn}')
+
+        initialize_stations(txt_fn, json_fn)
+        logging.debug(f'rebuilt {json_fn} from {txt_fn}')
+
+    with open(json_fn, 'rb') as f:
+        s = f.read().decode()
+        stations = orjson.loads(s)
+        logging.debug(f'read stations from {json_fn}')
+    return json_fn, stations
+
 
 def main():
     parser = argparse.ArgumentParser(description='decode radiosonde BUFR and netCDF reports',
@@ -871,60 +914,56 @@ def main():
     logging.basicConfig(level=level)
     os.umask(0o22)
 
-    # read the station_list.json file
-    # create or update on the fly if needed from station_list.txt (same dir assumed)
-    (fn, ext) = os.path.splitext(os.path.basename(args.stations))
-    jstations = fn + ".json"
-    if newer(args.stations, ".json"):
-        # rebuild the json file
-        initialize_stations(args.stations)
-        logging.debug(f'rebuilt {jstations} from {args.stations}')
-
-    with open(jstations, 'rb') as f:
-        s = f.read().decode()
-        stations = orjson.loads(s)
-        logging.debug(f'read stations from {jstations}')
+    station_fn, station_dict = update_station_list(args.stations)
 
     for f in args.files:
-        (fn, ext) = os.path.splitext(os.path.basename(f))
 
         if not args.ignore_timestamps and not newer(f, ".timestamp"):
             logging.debug(f"skipping: {f}  (timestamp)")
             continue
 
+        (fn, ext) = os.path.splitext(f)
         logging.debug(f"processing: {f} fn={fn} ext={ext}")
 
         if ext == '.zip':  # a zip archive of BUFR files
             zf = zipfile.ZipFile(f)
             for info in zf.infolist():
                 try:
-                    logging.debug(f"reading: {info.filename} from {f}")
+                    logging.debug(f"reading: {f} member {info.filename}")
                     data = zf.read(info.filename)
                     fd, path = tempfile.mkstemp(dir=args.tmpdir)
                     os.write(fd, data)
                     os.lseek(fd, 0, os.SEEK_SET)
                     file = os.fdopen(fd)
                 except KeyError:
-                    log.error(
-                        f'ERROR: Did not find {info.filename} in zip file {f}')
+                    log.error(f'ERROR: zip file {f}: no such member {info.filename}')
+                    continue
                 else:
-                    #logging.debug(f"processing: {info.filename} from {f}")
-                    (bn, ext) = os.path.splitext(info.filename)
-                    process_bufr(args, file, info.filename, f)
+                    logging.debug(f"processing BUFR: {f} member {info.filename}")
+                    success = process_bufr(args, file, info.filename, f)
                     file.close()
                     os.remove(path)
-                    if not args.ignore_timestamps:
+                    if success and not args.ignore_timestamps:
                         Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
+
+                    # move to failed
+
         elif ext == '.bin':   # a singlle BUFR file
             file = open(f, 'rb')
-            process_bufr(args, file, f, None)
+            logging.debug(f"processing BUFR: {f}")
+
+            success = process_bufr(args, file, f, None)
             file.close()
-            if not args.ignore_timestamps:
+            if success  and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
+            # move to failed
+
         elif ext == '.gz':  # a gzipped netCDF file
-            process_netcdf(f, stations)
-            if not args.ignore_timestamps:
+            logging.debug(f"processing netCDF: {f}")
+            success = process_netcdf(f, station_dict)
+            if success  and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
+            # move to failed? do not think so
 
     if args.summary:
         update_summary(args, updated_stations)

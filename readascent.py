@@ -45,6 +45,10 @@ MAX_FLIGHT_DURATION = 3600 * 5  # rather unlikely
 FAKE_TIME_STEPS = 30  # assume 30sec update interval
 BROTLI_SUMMARY_QUALITY = 11 #7
 
+# drop ascents older than MAX_ASCENT_AGE_IN_SUMMARY from summary
+# the files are kept nevertheless
+MAX_ASCENT_AGE_IN_SUMMARY = 3 * 3600 *24
+
 # metpy is terminally slow, so roll our own sans dimension checking
 def geopotential_height_to_height(gph):
     geopotential = gph * earth_gravity
@@ -351,7 +355,7 @@ def bufr_qc(args, h, s, fn, zip):
     return True
 
 
-def write_geojson(args, fc, fn, zip, updated_stations):
+def write_geojson(args, source, fc, fn, zip, updated_stations):
     fc.properties['origin_member'] = PurePath(fn).name
     if zip:
         fc.properties['origin_archive'] = PurePath(zip).name
@@ -369,14 +373,15 @@ def write_geojson(args, fc, fn, zip, updated_stations):
         cext = ".br"
 
     cc = station_id[:2]
+    subdir = station_id[2:5]
 
     syn_time = datetime.utcfromtimestamp(
         fc.properties['syn_timestamp']).replace(tzinfo=pytz.utc)
     day = syn_time.strftime("%Y%m%d")
     time = syn_time.strftime("%H%M%S")
 
-    dest = f'{args.destdir}/{cc}/{station_id}_{day}_{time}.geojson{cext}'
-    ref = f'{cc}/{station_id}_{day}_{time}.geojson'
+    dest = f'{args.destdir}/{source}/{cc}/{subdir}/{station_id}_{day}_{time}.geojson{cext}'
+    ref = f'{source}/{cc}/{subdir}/{station_id}_{day}_{time}.geojson'
 
     path = Path(dest).parent.absolute()
     Path(path).mkdir(parents=True, exist_ok=True)
@@ -408,14 +413,14 @@ def write_geojson(args, fc, fn, zip, updated_stations):
 
 
 
-def gen_output(args, h, s, fn, zip, updated_stations):
+def gen_output(args, source, h, s, fn, zip, updated_stations):
     h['samples'] = s
 
     fc = convert_to_geojson(args, h, s)
-    write_geojson(args, fc, fn, zip, updated_stations)
+    write_geojson(args, source, fc, fn, zip, updated_stations)
 
 
-def process_bufr(args, f, fn, zip, updated_stations):
+def process_bufr(args, source, f, fn, zip, updated_stations):
     try:
         (h, s) = bufr_decode(f, fn, zip, args)
 
@@ -433,7 +438,7 @@ def process_bufr(args, f, fn, zip, updated_stations):
 
     else:
         if bufr_qc(args, h, s, fn, zip):
-            return gen_output(args, h, s, fn, zip, updated_stations)
+            return gen_output(args, source, h, s, fn, zip, updated_stations)
         return False
 
 
@@ -452,6 +457,9 @@ def read_summary(fn):
     return summary
 
 
+def now():
+    return datetime.utcnow().timestamp()
+
 def update_geojson_summary(args, stations, updated_stations, summary):
 
     stations_with_ascents = dict()
@@ -461,6 +469,9 @@ def update_geojson_summary(args, stations, updated_stations, summary):
             st_id = feature.properties['ascents'][0]['station_id']
             stations_with_ascents[st_id] = feature
 
+    # remove entries from ascents which have a syn_timestamp less than cutoff_ts
+    cutoff_ts = now() - args.max_age
+
     # now walk the updates
     for id, asc in updated_stations:
         if id in stations_with_ascents:
@@ -468,14 +479,19 @@ def update_geojson_summary(args, stations, updated_stations, summary):
             # we already have ascents from this station.
             # append, sort by synoptic time and de-duplicate
             oldlist = stations_with_ascents[id]['properties']['ascents']
-            oldlist.append(asc)
-            newlist = sorted(oldlist, key=itemgetter(
+            pruned = [ x for x in  oldlist if x['syn_timestamp'] > cutoff_ts]
+
+            logging.debug(f"pruning {id}: {len(oldlist)} -> {len(pruned)}")
+
+            pruned.append(asc)
+            newlist = sorted(pruned, key=itemgetter(
                 'syn_timestamp'), reverse=True)
             # https://stackoverflow.com/questions/9427163/remove-duplicate-dict-in-list-in-python
             seen = set()
             dedup = []
             for d in newlist:
-                t = d['syn_timestamp']
+                # keep an ascent of each source, even if same synop time
+                t = str(d['syn_timestamp']) + d['source']
                 if t not in seen:
                     seen.add(t)
                     dedup.append(d)
@@ -703,7 +719,7 @@ def height_to_geopotential_height(height):
     return earth_gravity / ((1 / height) + 1 / earth_avg_radius) / earth_gravity
 
 
-def emit_ascents(args, file, archive, raob, stations, updated_stations):
+def emit_ascents(args, source, file, archive, raob, stations, updated_stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
         raob, file)
 
@@ -796,10 +812,10 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
 
             fc.features.append(f)
         fc.properties['lastSeen'] = sampleTime.timestamp()
-        write_geojson(args, fc, file, archive, updated_stations)
+        write_geojson(args,  source, fc, file, archive, updated_stations)
     return True
 
-def process_netcdf(args, file, archive, stationdict, updated_stations):
+def process_netcdf(args, source, file, archive, stationdict, updated_stations):
 
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
@@ -840,7 +856,7 @@ def process_netcdf(args, file, archive, stationdict, updated_stations):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        return emit_ascents(args, file, archive, raob, stationdict, updated_stations)
+        return emit_ascents(args, source, file, archive, raob, stationdict, updated_stations)
 
 
 def newer(filename, ext):
@@ -955,6 +971,7 @@ def main():
                         required=True,
                         help="path to station_list.txt file")
     parser.add_argument('--tmpdir', action='store', default="/tmp")
+    parser.add_argument('--max-age', action='store', type=int, default=MAX_ASCENT_AGE_IN_SUMMARY)
     parser.add_argument('files', nargs='*')
 
     args = parser.parse_args()
@@ -989,6 +1006,7 @@ def main():
 
         if ext == '.zip':  # a zip archive of BUFR files
             with zipfile.ZipFile(f) as zf:
+                source = "gisc"
                 for info in zf.infolist():
                     try:
                         logging.debug(f"reading: {f} member {info.filename}")
@@ -1004,8 +1022,7 @@ def main():
                     else:
                         logging.debug(
                             f"processing BUFR: {f} member {info.filename}")
-                        success = process_bufr(
-                            args, file, info.filename, f, updated_stations)
+                        success = process_bufr(args, source, file, info.filename, f, updated_stations)
                         file.close()
                         os.remove(path)
                         if success and not args.ignore_timestamps:
@@ -1014,18 +1031,20 @@ def main():
                         # move to failed
 
         elif ext == '.bin':   # a singlle BUFR file
+            source = "gisc"
             file = open(f, 'rb')
             logging.debug(f"processing BUFR: {f}")
 
-            success = process_bufr(args, file, f, None, updated_stations)
+            success = process_bufr(args, source, file, f, None, updated_stations)
             file.close()
             if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed
 
         elif ext == '.gz':  # a gzipped netCDF file
+            source = "madis"
             logging.debug(f"processing netCDF: {f}")
-            success = process_netcdf(args, f, None, station_dict, updated_stations)
+            success = process_netcdf(args, source, f, None, station_dict, updated_stations)
             if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed? do not think so

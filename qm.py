@@ -130,7 +130,11 @@ def RemNaN_and_Interp(raob):
 
 def commit_sonde(raob, station):
     P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
-    #print(wmo_ids)
+
+    if not station in wmo_ids:
+        print("--- station not found:", station)
+        return False
+    
     for i,stn in enumerate(wmo_ids):
         if stn != station:
             continue
@@ -142,8 +146,9 @@ def commit_sonde(raob, station):
         pressurehPA = P[i]
         u_windMS = U[i]
         v_windMS = V[i]
-
-
+        #print(sonde_validtime, len(temperatureK),len(dewpointK),len(pressurehPA),len(u_windMS),len(v_windMS))
+        for i in range(len(temperatureK)):
+            print(pressurehPA[i],temperatureK[i], dewpointK[i],  u_windMS[i], v_windMS[i])
 
 def extract_madis_data(file, station):
 

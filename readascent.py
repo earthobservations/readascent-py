@@ -31,7 +31,7 @@ import time
 import warnings
 #warnings.filterwarnings("ignore")
 
-np.seterr(all='raise')
+#np.seterr(all='raise')
 # lifted from https://github.com/tjlang/SkewT
 
 
@@ -357,6 +357,10 @@ def write_geojson(args, fc, fn, zip, updated_stations):
     if zip:
         fc.properties['origin_archive'] = PurePath(zip).name
     station_id = fc.properties['station_id']
+
+    if args.station and args.station != station_id:
+        return
+
     logging.debug(f'output samples retained: {len(fc.features)}, station id={station_id}')
 
     updated_stations.append((station_id, fc.properties))
@@ -636,25 +640,28 @@ def RemNaN_and_Interp(raob, file):
                     f = interp1d(Ptd, Td, kind='linear', fill_value="extrapolate")
                     Td = f(P)
                 except FloatingPointError as e:
-                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
-                    #logging.info(f"Ptd={Ptd} Td={Td} P={P}")
-                    continue
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping Ptd, Td")
+                    # logging.info(f"Ptd={len(Ptd)} Td={len(Td)} Tdx={len(Tdx)}")
+                    # logging.info(f"Ptd={list(Ptd)} Td={list(Td)} P={list(P)}")
+
+                    raise
+                    # continue
 
                 try:
                     f = interp1d(Pm, u, kind='linear', fill_value="extrapolate")
                     U = f(P)
                 except FloatingPointError as e:
-                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping Pm, u")
                     #logging.info(f"Pm={Pm} u={u} P={P}")
-                    continue
+                    raise
 
                 try:
                     f = interp1d(Pm, v, kind='linear', fill_value="extrapolate")
                     V = f(P)
                 except FloatingPointError as e:
-                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping")
+                    logging.info(f"station {raob['wmo_ids'][i]} i={i} {e}, file={file} - skipping Pm, v")
                     #logging.info(f"Pm={Pm} v={v} P={P}")
-                    continue
+                    raise
 
                 U = U * 1.94384
                 V = V * 1.94384
@@ -700,12 +707,12 @@ def height_to_geopotential_height(height):
 def emit_ascents(args, file, archive, raob, stations, updated_stations):
     relTime, sondTyp, staLat, staLon, staElev, P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(
         raob, file)
-    # print(staElev)
-    for i, stn in enumerate(wmo_ids):
 
+    for i, stn in enumerate(wmo_ids):
+        if args.station and args.station != stn:
+            continue
         if stn in stations:
             station = stations[stn]
-#            print(f"---- station {stn} found: {station}")
             if isnan(staLat[i]):
                 staLat[i] = station['lat']
             if isnan(staLon[i]):
@@ -713,10 +720,10 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
             if isnan(staElev[i]):
                 staElev[i] = station['elevation']
         else:
-            #            print(f"station {stn} not found")
             station = None
 
         if isnan(staLat[i]) or isnan(staLon[i]) or isnan(staElev[i]):
+            log.error(f"skipping station {stn} - no location")
             continue
 
         #print(i, stn)
@@ -782,12 +789,12 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
                                 properties=properties)
 
             if not f.is_valid:
-                    logging.error(f'--- invalid GeoJSON! {f.errors()}')
+                logging.error(f'--- invalid GeoJSON! {f.errors()}')
 
             fc.features.append(f)
         fc.properties['lastSeen'] = sampleTime.timestamp()
         write_geojson(args, fc, file, archive, updated_stations)
-        return True
+    return True
 
 def process_netcdf(args, file, archive, stationdict, updated_stations):
 
@@ -931,6 +938,8 @@ def main():
     parser.add_argument('--hstep', action='store', type=int, default=100,
                         help="generate output only if samples vary vertically more than hstep")
     parser.add_argument('--destdir', action='store', default=".")
+    parser.add_argument('--station', action='store', default=None,
+                        help="extract a single station by WMO id")
     parser.add_argument('--geojson', action='store_true', default=False)
     parser.add_argument('--dump-geojson', action='store_true', default=False)
     parser.add_argument('--brotli', action='store_true', default=False)

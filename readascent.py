@@ -6,8 +6,7 @@ from scipy.interpolate import interp1d
 from pprint import pprint
 from operator import itemgetter
 from netCDF4 import Dataset
-from math import cos, pi, isnan
-from math import atan, sin, cos
+from math import cos, pi, isnan, isinf, atan, sin, cos
 from eccodes import *
 from datetime import datetime, timezone, timedelta, date
 import re
@@ -723,7 +722,7 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
             station = None
 
         if isnan(staLat[i]) or isnan(staLon[i]) or isnan(staElev[i]):
-            log.error(f"skipping station {stn} - no location")
+            logging.error(f"skipping station {stn} - no location")
             continue
 
         #print(i, stn)
@@ -756,6 +755,10 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
         prevSecsIntoFlight = 0
         for n in range(0, len(P[i])):
             pn = P[i][n]
+
+            if isinf(T[i][n]) or isinf(Td[i][n]) or isinf(P[i][n]):
+                logging.debug(f"station {stn}: skipping layer  P={P[i][n]}  T={T[i][n]} Td={Td[i][n]}")
+                continue
 
             # gross haque to determine rough time of sample
             height = round(barometric_equation_inv(h0, t0, p0, pn), 1)

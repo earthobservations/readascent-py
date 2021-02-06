@@ -38,7 +38,7 @@ path_colors = {
 
 function drawpath(geojson, l) {
     // record for later, and maybe a skewt on click
-    l.sourceTarget.feature.properties.ascents[0].data = geojson;
+    //l.sourceTarget.feature.properties.ascents[0].data = geojson;
     path_source = geojson.properties.path_source;
 
     var lineCoordinate = [];
@@ -51,24 +51,29 @@ function drawpath(geojson, l) {
 }
 
 function mouseover(l) {
-    var f = l.sourceTarget.feature;
-    var p = datapath + f.properties.ascents[0].path;
+    var ascents = l.target.ascents;
 
-    if (!f.properties.ascents[0].hasOwnProperty('data')) {
-        $.getJSON(p,
-            (function(site) {
-                return function(geojson) {
-                    drawpath(geojson, site);
-                };
-            }(l))
-        );
-    } // else already loaded
+    for (const a of ascents) {
+        if (!a.hasOwnProperty('data')) {
+            var p = datapath + a.path;
+            l.ascent = a;
+            $.getJSON(p,
+                (function(site) {
+                    return function(geojson) {
+                        site.ascent.data = geojson;
+                        drawpath(geojson, site);
+                    };
+                }(l))
+            );
+        }
+    }
 }
 
 function clicked(l) {
     let ctx = document.getElementById("chart");
     // debugger;
-    var f = l.sourceTarget.feature;
+    // var f = l.sourceTarget.feature;
+    var a = f.target.ascents;
     // if (f.properties.ascents[0].hasOwnProperty('data')) {
     //     alert("the ascent data is all loaded, but now it needs somebody more competent" +
     //         " to actually draw a SkewT diagram.")
@@ -79,15 +84,20 @@ function clicked(l) {
     // }
 }
 
+function findBUFR(value, index, array) {
+    return (value.source === "BUFR");
+}
+
+function findnetCDF(value, index, array) {
+    return (value.source === "netCDF");
+}
+
 $.getJSON(summary, function(data) {
     L.geoJson(data, {
 
         pointToLayer: function(feature, latlng) {
             let now = Math.floor(Date.now() / 1000);
-            let ascents = feature.properties.ascents
-
-            var newest_ascent = ascents[0];
-            var ts  = ascents[0].syn_timestamp;
+            let ascents = feature.properties.ascents;
 
             // prefer BUFR over netCDF
             // ascents are sorted descending by syn_timestamp
@@ -96,25 +106,33 @@ $.getJSON(summary, function(data) {
             // BUFR-derived ascents are better quality data so prefer them.
             // we keep the netCDF-derived ascents of same timestamp around
             // to check how good the trajectory simulation is
-            if ((newest_ascent.source === "netCDF") &&  (ascents.length > 1)) {
-                second = ascents[1];
-                if ((second.source === "BUFR") && (second.syn_timestamp == ts)) {
-                    newest_ascent = second;
-                }
-            }
+            var newest_bufr = ascents.find(findBUFR);
+            var newest_netcdf = ascents.find(findnetCDF);
+            if (!newest_bufr && !newest_netcdf)
+                return;
 
-            ts = newest_ascent.firstSeen;
+            if (newest_bufr && newest_netcdf &&
+                (newest_bufr.syn_timestamp) ==
+                (newest_netcdf.syn_timestamp)) {
+                a = [newest_bufr, newest_netcdf];
+            }
+            else {
+                if (newest_bufr)
+                    a = [newest_bufr];
+                else
+                    a = [newest_netcdf];
+            }
+            var primary = a[0];
+            var ts = primary.syn_timestamp;
+
             age = Math.round(Math.min((now - ts) / 3600, maxHrs - 1));
             age = Math.max(age, 0);
-            source = newest_ascent.source; // "netCDF" or "BUFR"
-            path_source = newest_ascent.path_source; // "simulated" or "origin"
+            // console.log(age, a);
 
-            console.log(age, source, path_source);
-
-            geojsonMarkerOptions.fillColor = marker_shades[source].get(age).getHex();
+            geojsonMarkerOptions.fillColor = marker_shades[primary.source].get(age).getHex();
 
             marker = L.circleMarker(latlng, geojsonMarkerOptions);
-
+            marker.ascents = a;
             var content = "<b>" + feature.properties.name + "</b>" + "<b>  " +
                 new Date(feature.properties.ascents[0].firstSeen * 1000).toLocaleString(undefined, {
                     year: 'numeric',
@@ -122,7 +140,7 @@ $.getJSON(summary, function(data) {
                     day: 'numeric',
                     hour: '2-digit',
                     minute: '2-digit',
-                }) + "</b><b> source: " + source + "</b>";
+                }) + "</b><b> source: " + primary.source + "</b>";
 
             marker.bindTooltip(content).openTooltip()
                 .on('click', clicked)

@@ -6,6 +6,7 @@ from io import BytesIO, open
 from ftplib import FTP
 from netCDF4 import Dataset
 import gzip
+import json
 from scipy.interpolate import interp1d
 #from api.models import Station, Radiosonde, UpdateRecord
 import warnings
@@ -134,7 +135,7 @@ def commit_sonde(raob, station):
     if not station in wmo_ids:
         print("--- station not found:", station)
         return False
-    
+
     for i,stn in enumerate(wmo_ids):
         if stn != station:
             continue
@@ -146,10 +147,20 @@ def commit_sonde(raob, station):
         pressurehPA = P[i]
         u_windMS = U[i]
         v_windMS = V[i]
+        ascent = []
         #print(sonde_validtime, len(temperatureK),len(dewpointK),len(pressurehPA),len(u_windMS),len(v_windMS))
         for i in range(len(temperatureK)):
-            print(pressurehPA[i],temperatureK[i], dewpointK[i],  u_windMS[i], v_windMS[i])
-
+            pt = {
+            "pressure" : pressurehPA[i],
+            "temperature": temperatureK[i],
+            "dewpoint":dewpointK[i],
+            "wind_u": u_windMS[i],
+            "wind_v":  v_windMS[i]
+            }
+            ascent.append(pt)
+            #print(pressurehPA[i],temperatureK[i], dewpointK[i],  u_windMS[i], v_windMS[i])
+        print(json.dumps(ascent, indent=4))
+        
 def extract_madis_data(file, station):
 
     with gzip.open(file, 'rb') as f:

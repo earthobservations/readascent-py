@@ -788,7 +788,7 @@ def emit_ascents(args, file, archive, raob, stations, updated_stations):
 
             #print(f"level={n} s={secsIntoFlight:.0f} {height:.1f}m p={pn} lon_t={lon_t} lat_t={lat_t} u={u} v={v} du={du:.1f} dv={dv:.1f} ", file=sys.stderr)
 
-            f = geojson.Feature(geometry=geojson.Point((float(lat_t), float(lon_t), height)),
+            f = geojson.Feature(geometry=geojson.Point((float(lon_t), float(lat_t), height)),
                                 properties=properties)
 
             if not f.is_valid:

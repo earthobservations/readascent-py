@@ -416,7 +416,7 @@ def gen_output(args, source, h, s, fn, zip, updated_stations):
     h['samples'] = s
 
     fc = convert_to_geojson(args, h, s)
-    write_geojson(args, source, fc, fn, zip, updated_stations)
+    return write_geojson(args, source, fc, fn, zip, updated_stations)
 
 
 def process_bufr(args, source, f, fn, zip, updated_stations):
@@ -438,7 +438,6 @@ def process_bufr(args, source, f, fn, zip, updated_stations):
     else:
         if bufr_qc(args, h, s, fn, zip):
             return gen_output(args, source, h, s, fn, zip, updated_stations)
-        return False
     return True
 
 
@@ -1026,10 +1025,12 @@ def main():
                         logging.debug(
                             f"processing BUFR: {f} member {info.filename}")
                         success = process_bufr(args, source, file, info.filename, f, updated_stations)
+                        logging.info(f"----- success={success}")
+
                         file.close()
                         os.remove(path)
                         if success and not args.ignore_timestamps:
-                            Path(f + ".timestamp").touch(mode=0o777, exist_ok=True)
+                            Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
 
                         # move to failed
 
@@ -1048,6 +1049,7 @@ def main():
             source = "madis"
             logging.debug(f"processing netCDF: {f}")
             success = process_netcdf(args, source, f, None, station_dict, updated_stations)
+            logging.info(f"----- success={success}")
             if success and not args.ignore_timestamps:
                 Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
             # move to failed? do not think so

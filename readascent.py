@@ -439,6 +439,7 @@ def process_bufr(args, source, f, fn, zip, updated_stations):
         if bufr_qc(args, h, s, fn, zip):
             return gen_output(args, source, h, s, fn, zip, updated_stations)
         return False
+    return True
 
 
 def read_summary(fn):

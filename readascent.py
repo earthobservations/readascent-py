@@ -265,8 +265,7 @@ def convert_to_geojson(args, h, samples):
 
     typ, id = gen_id(h)
 
-    ts = ciso8601.parse_datetime(
-        h['typicalDate'] + " " + h['typicalTime']).timestamp()
+    ts = ciso8601.parse_datetime(h['typicalDate'] + " " + h['typicalTime'] + "-00:00").timestamp()
 
     properties = {
         "station_id":  id,

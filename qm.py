@@ -9,7 +9,7 @@ import gzip
 from scipy.interpolate import interp1d
 #from api.models import Station, Radiosonde, UpdateRecord
 import warnings
-warnings.filterwarnings("ignore")
+#warnings.filterwarnings("ignore")
 
 
 
@@ -128,34 +128,24 @@ def RemNaN_and_Interp(raob):
     return P_allstns, T_allstns, Td_allstns, U_allstns, V_allstns, wmo_ids_allstns, times_allstns
 
 
-def commit_sonde(raob):
+def commit_sonde(raob, station):
     P, T, Td, U, V, wmo_ids, times = RemNaN_and_Interp(raob)
-
+    #print(wmo_ids)
     for i,stn in enumerate(wmo_ids):
-        radiosonde = Radiosonde.objects.filter(wmo_id=stn).first()
-        station = Station.objects.filter(stn_wmoid=stn).first()
+        if stn != station:
+            continue
+        print(i,stn)
 
-        if station:
-            # breakpoint()
-            if radiosonde:
-                radiosonde.sonde_validtime = times[i]
-                radiosonde.temperatureK = T[i]
-                radiosonde.dewpointK = Td[i]
-                radiosonde.pressurehPA = P[i]
-                radiosonde.u_windMS = U[i]
-                radiosonde.v_windMS = V[i]
-                radiosonde.save()
-            else:
-                radiosonde = Radiosonde(sonde_validtime=times[i], wmo_id=stn, station_name=station.stn_name,
-                                        lat=station.stn_lat, lon=station.stn_lon, temperatureK=T[i], dewpointK=Td[i],
-                                        pressurehPA=P[i], u_windMS=U[i], v_windMS=V[i])
-                radiosonde.save()
-        else:
-            print("WMO station {} does not appear to be in the database, skipping.".format(stn))
+        sonde_validtime = times[i]
+        temperatureK = T[i]
+        dewpointK = Td[i]
+        pressurehPA = P[i]
+        u_windMS = U[i]
+        v_windMS = V[i]
 
 
 
-def extract_madis_data(file):
+def extract_madis_data(file, station):
 
     with gzip.open(file, 'rb') as f:
         nc = Dataset('inmemory.nc', memory=f.read())
@@ -177,11 +167,11 @@ def extract_madis_data(file):
             "times": [datetime.utcfromtimestamp(tim).replace(tzinfo=pytz.utc) for tim in synTimes],
             "wmo_ids": [str(id).zfill(5) for id in wmo_ids]
         }
-        commit_sonde(raob)
+        commit_sonde(raob, station)
 
 
 
 
-def run():
+#def run():
     # UpdateRecord.delete_expired(10)
-    raob = extract_madis_data("madis/20210130_1100.gz")
+raob = extract_madis_data("madis/20210130_1100.gz", '42182')

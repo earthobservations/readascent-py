@@ -466,8 +466,10 @@ def update_geojson_summary(args, stations, updated_stations, summary):
     # unroll into dicts for quick access
     if 'features' in summary:
         for feature in summary.features:
-            st_id = feature.properties['ascents'][0]['station_id']
-            stations_with_ascents[st_id] = feature
+            a = feature.properties['ascents']
+            if len(a):
+                st_id = a[0]['station_id']
+                stations_with_ascents[st_id] = feature
 
     # remove entries from ascents which have a syn_timestamp less than cutoff_ts
     cutoff_ts = now() - args.max_age

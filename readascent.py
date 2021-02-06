@@ -1028,7 +1028,7 @@ def main():
                         file.close()
                         os.remove(path)
                         if success and not args.ignore_timestamps:
-                            Path(fn + ".timestamp").touch(mode=0o777, exist_ok=True)
+                            Path(f + ".timestamp").touch(mode=0o777, exist_ok=True)
 
                         # move to failed
 

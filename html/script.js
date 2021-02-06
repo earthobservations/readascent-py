@@ -62,7 +62,8 @@ function clicked(l) {
     if (f.properties.ascents[0].hasOwnProperty('data')) {
         alert("the ascent data is all loaded, but now it needs somebody more competent" +
             " to actually draw a SkewT diagram.")
-    } else {
+    }
+    else {
         var p = datapath + f.properties.ascents[0].path;
         alert("draw a skewT by loading JSON from: " + p);
     }
@@ -75,6 +76,9 @@ $.getJSON(url, function(data) {
             now = Math.floor(Date.now() / 1000);
             ts = feature.properties.ascents[0].firstSeen;
             age = Math.round(Math.min((now - ts) / 3600, maxHrs - 1));
+            if (age < 0) {
+                age = 0;
+            }
             geojsonMarkerOptions.fillColor = target.get(age).getHex();
 
             marker = L.circleMarker(latlng, geojsonMarkerOptions);
